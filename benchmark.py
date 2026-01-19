@@ -14,12 +14,12 @@ print(f"Input: {mesh.num_vertices:,} vertices, {mesh.num_faces:,} faces")
 
 results = {}
 
-for backend in ['trimesh', 'hybrid']:
+for backend, target in [('trimesh', 5000), ('hybrid', 3500)]:
     print(f"\n{'-'*40}")
-    print(f"Testing {backend.upper()} backend...")
+    print(f"Testing {backend.upper()} backend (target={target})...")
     
     start = time.time()
-    pipeline = RetopoPipeline(backend=backend, target_faces=5000)
+    pipeline = RetopoPipeline(backend=backend, target_faces=target)
     output, score = pipeline.process(mesh, enable_timing=False)
     elapsed = time.time() - start
     
