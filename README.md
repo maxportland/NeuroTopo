@@ -274,26 +274,96 @@ rm -rf ~/.cache/neurotopo/
 
 ### Test Harness
 
-JSON-config driven test runner for comprehensive testing:
+JSON-config driven test runner for comprehensive pipeline validation:
 
 ```bash
-# Run all tests
-python tests/test_harness.py
-
-# Run specific suite
+# Run specific test suite
 python tests/test_harness.py --suite ai_quality
 
-# Available suites: quick, full, ai_quality, full_with_ai
+# Available suites
+python tests/test_harness.py --suite quick           # Fast smoke test (2 views, 512px)
+python tests/test_harness.py --suite semantic        # Semantic segmentation tests
+python tests/test_harness.py --suite retopology      # Retopology + quality metrics
+python tests/test_harness.py --suite ai_quality      # Retopo + GPT-4o visual assessment
+python tests/test_harness.py --suite full            # Complete pipeline
+python tests/test_harness.py --suite full_with_ai    # Everything including AI assessment
+
+# List available suites
+python tests/test_harness.py --list
 ```
 
-Configure tests in `tests/test_config.json`:
+**Example output:**
+```
+Running test suite: ai_quality
+Results dir: results/20260119_144940/
+============================================================
+Testing mesh: test_mesh
+  ✓ PASS: retopology (4.08s)
+         256108 → 6151 faces, 100.0% quads
+  ✓ PASS: ai_quality_assessment (52.88s)
+         AI Score: 65.0/100, Issues: warning:3
+============================================================
+  TEST SUMMARY: 2/2 passed
+============================================================
+```
+
+### Test Results
+
+All test artifacts are saved to timestamped `results/` folders:
+
+```
+results/20260119_144940/
+├── test_mesh_retopo.obj           # Retopologized mesh
+├── test_mesh_ai_quality_report.json  # AI assessment details
+├── test_report.json               # Full test run summary
+└── renders/retopo/
+    ├── view_front.png             # Wireframe renders (6 angles)
+    ├── view_back.png
+    └── ...
+```
+
+### Cleanup Script
+
+Manage test results with the cleanup utility:
+
+```bash
+# List all test runs
+python scripts/clean_results.py --list
+
+# Keep only the last 5 runs
+python scripts/clean_results.py --keep 5
+
+# Delete runs older than 7 days
+python scripts/clean_results.py --older-than 7
+
+# Preview deletions (dry run)
+python scripts/clean_results.py --keep 3 --dry-run
+
+# Interactive mode
+python scripts/clean_results.py
+```
+
+### Test Configuration
+
+Customize tests in `tests/test_config.json`:
+
 ```json
 {
-  "test_suites": {
-    "ai_quality": ["retopology", "ai_quality_assessment"]
+  "defaults": {
+    "api_provider": "openai",
+    "model": "gpt-4o",
+    "resolution": [1024, 1024],
+    "num_views": 6
   },
-  "thresholds": {
-    "min_ai_quality_score": 50.0
+  "quality_thresholds": {
+    "min_overall_score": 40.0,
+    "min_ai_quality_score": 50.0,
+    "min_quad_quality": 10.0
+  },
+  "output": {
+    "results_dir": "results",
+    "save_renders": true,
+    "save_retopo_mesh": true
   }
 }
 ```
