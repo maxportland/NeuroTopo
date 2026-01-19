@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Test the evaluation fix."""
 import numpy as np
-from meshretopo.core.mesh import Mesh
-from meshretopo import RetopoPipeline
-from meshretopo.evaluation.metrics import MeshEvaluator
+from neurotopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
+from neurotopo.evaluation.metrics import MeshEvaluator
 
 mesh = Mesh.from_file('test_mesh.obj')
 pipeline = RetopoPipeline(backend='hybrid', target_faces=5000)

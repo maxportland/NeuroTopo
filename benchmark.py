@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Final benchmark comparison."""
 import time
-from meshretopo.core.mesh import Mesh
-from meshretopo import RetopoPipeline
+from neurotopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
 
 print("=" * 60)
-print("MeshRetopo Performance & Quality Benchmark")
+print("NeuroTopo Performance & Quality Benchmark")
 print("=" * 60)
 
 print("\nLoading mesh...")

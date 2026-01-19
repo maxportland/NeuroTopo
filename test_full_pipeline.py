@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Full pipeline test with timing."""
 import time
-from meshretopo.core.mesh import Mesh
-from meshretopo import RetopoPipeline
+from neurotopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
 
 print("Loading mesh...")
 mesh = Mesh.from_file('test_mesh.obj')

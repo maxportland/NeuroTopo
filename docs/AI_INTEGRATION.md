@@ -5,7 +5,7 @@ This document outlines opportunities for leveraging AI vision models (OpenAI GPT
 ## Current Integration
 
 ### Semantic Segmentation (Implemented ✅)
-- **Location**: `src/meshretopo/analysis/semantic.py`
+- **Location**: `src/neurotopo/analysis/semantic.py`
 - **Purpose**: Identifies anatomical/semantic regions (eyes, mouth, nose, joints)
 - **Usage**: Informs topology rules (pole placement, edge loop density)
 - **Caching**: Renders and API responses cached based on source file mtime
@@ -13,7 +13,7 @@ This document outlines opportunities for leveraging AI vision models (OpenAI GPT
 ## Planned Integrations
 
 ### 1. AI Quality Assessment (In Progress 🔄)
-**Location**: `src/meshretopo/evaluation/ai_quality.py`
+**Location**: `src/neurotopo/evaluation/ai_quality.py`
 
 Have AI visually evaluate the retopologized mesh and provide:
 - Specific topology critiques ("edge loops around eyes too sparse")
@@ -27,7 +27,7 @@ Have AI visually evaluate the retopologized mesh and provide:
 - Can identify animation-specific problems
 
 ### 2. Edge Flow Direction Guidance (Planned 📋)
-**Location**: `src/meshretopo/guidance/ai_flow.py`
+**Location**: `src/neurotopo/guidance/ai_flow.py`
 
 AI analyzes the mesh and suggests optimal edge flow directions:
 - "Edges should follow the nasolabial fold"
@@ -40,7 +40,7 @@ AI analyzes the mesh and suggests optimal edge flow directions:
 - Convert to vector field for remeshing guidance
 
 ### 3. Mesh Type Auto-Classification (Planned 📋)
-**Location**: `src/meshretopo/analysis/mesh_classifier.py`
+**Location**: `src/neurotopo/analysis/mesh_classifier.py`
 
 Automatically classify mesh type to select optimal settings:
 - **Character/Organic**: Quad-dominant, animation-ready, deformation topology
@@ -54,7 +54,7 @@ Automatically classify mesh type to select optimal settings:
 - Auto-select pipeline presets
 
 ### 4. Iterative Refinement Loop (Planned 📋)
-**Location**: `src/meshretopo/pipeline/ai_refinement.py`
+**Location**: `src/neurotopo/pipeline/ai_refinement.py`
 
 Closed-loop optimization using AI feedback:
 

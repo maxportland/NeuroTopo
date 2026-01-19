@@ -3,8 +3,8 @@
 
 import os
 from datetime import datetime
-from meshretopo import RetopoPipeline
-from meshretopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
+from neurotopo.core.mesh import Mesh
 
 # Create timestamped folder
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -42,7 +42,7 @@ for backend, target in [('trimesh', 5000), ('hybrid', 3500)]:
 # Save detailed summary
 summary_path = f'{output_dir}/summary.txt'
 with open(summary_path, 'w') as f:
-    f.write(f'MeshRetopo Results - {timestamp}\n')
+    f.write(f'NeuroTopo Results - {timestamp}\n')
     f.write('=' * 60 + '\n\n')
     f.write(f'Input: test_mesh.obj\n')
     f.write(f'  Vertices: {mesh.num_vertices:,}\n')

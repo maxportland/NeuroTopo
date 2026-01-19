@@ -2,7 +2,7 @@
 
 ## Overview
 
-MeshRetopo follows a pipeline architecture:
+NeuroTopo follows a pipeline architecture:
 
 ```
 Input Mesh → Analysis → Guidance → Remeshing → Post-Processing → Evaluation → Output
@@ -11,7 +11,7 @@ Input Mesh → Analysis → Guidance → Remeshing → Post-Processing → Evalu
 ## Module Hierarchy
 
 ```
-meshretopo/
+neurotopo/
 ├── core/               # Foundation layer
 │   ├── mesh.py        # Mesh data structure (vertices, faces, properties)
 │   ├── fields.py      # Scalar/vector fields on mesh surfaces

@@ -5,8 +5,8 @@ import os
 import logging
 logging.basicConfig(level=logging.DEBUG)
 
-from meshretopo.core.mesh import Mesh
-from meshretopo.analysis.semantic import SemanticAnalyzer
+from neurotopo.core.mesh import Mesh
+from neurotopo.analysis.semantic import SemanticAnalyzer
 
 # Load mesh
 mesh = Mesh.from_file('test_mesh.obj')

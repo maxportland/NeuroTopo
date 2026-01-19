@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "meshretopo"
+name = "neurotopo"
 version = "0.1.0"
 description = "AI-assisted retopology: neural guidance + deterministic mesh generation"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "MeshRetopo Team"}
+    {name = "NeuroTopo Team"}
 ]
 keywords = ["mesh", "retopology", "3d", "neural-network", "geometry-processing"]
 classifiers = [
@@ -47,7 +47,7 @@ dev = [
 ]
 
 [project.scripts]
-meshretopo = "meshretopo.cli:app"
+neurotopo = "neurotopo.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Reusable test harness for MeshRepair - JSON config driven.
+Reusable test harness for NeuroTopo - JSON config driven.
 
 Usage:
     python tests/test_harness.py                    # Run 'quick' suite
@@ -25,11 +25,11 @@ from typing import Any
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from meshretopo.core.mesh import Mesh
-from meshretopo.analysis.semantic import SemanticAnalyzer, SemanticSegmentation
-from meshretopo.pipeline import RetopoPipeline
-from meshretopo.evaluation.metrics import MeshEvaluator
-from meshretopo.utils.keychain import ensure_api_key
+from neurotopo.core.mesh import Mesh
+from neurotopo.analysis.semantic import SemanticAnalyzer, SemanticSegmentation
+from neurotopo.pipeline import RetopoPipeline
+from neurotopo.evaluation.metrics import MeshEvaluator
+from neurotopo.utils.keychain import ensure_api_key
 
 
 @dataclass
@@ -57,7 +57,7 @@ class TestResult:
 
 
 class TestHarness:
-    """JSON-config driven test harness for MeshRepair."""
+    """JSON-config driven test harness for NeuroTopo."""
     
     def __init__(self, config_path: str = None):
         self.config_path = config_path or self._default_config_path()
@@ -477,8 +477,8 @@ class TestHarness:
         start: float
     ) -> TestResult:
         """Test AI-powered visual quality assessment."""
-        from meshretopo.evaluation.ai_quality import AIQualityAssessor
-        from meshretopo.analysis.blender_render import BlenderRenderer
+        from neurotopo.evaluation.ai_quality import AIQualityAssessor
+        from neurotopo.analysis.blender_render import BlenderRenderer
         
         if not hasattr(self, "_last_retopo"):
             return TestResult(
@@ -613,7 +613,7 @@ class TestHarness:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="MeshRepair Test Harness",
+        description="NeuroTopo Test Harness",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

@@ -144,7 +144,7 @@ score.compute_scores(reference_diagonal)
 ## Feature Detection Thresholds
 
 ```python
-from meshretopo.analysis.features import FeatureDetector
+from neurotopo.analysis.features import FeatureDetector
 
 detector = FeatureDetector(
     mesh,
@@ -183,7 +183,7 @@ output:
 
 Run with:
 ```bash
-meshretopo experiment --config experiments/config.yaml
+neurotopo experiment --config experiments/config.yaml
 ```
 
 ---
@@ -192,6 +192,6 @@ meshretopo experiment --config experiments/config.yaml
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MESHRETOPO_CACHE_DIR` | `~/.cache/meshretopo` | Cache directory |
+| `MESHRETOPO_CACHE_DIR` | `~/.cache/neurotopo` | Cache directory |
 | `MESHRETOPO_LOG_LEVEL` | `INFO` | Logging level |
 | `MESHRETOPO_NUM_THREADS` | CPU count | Parallel workers |

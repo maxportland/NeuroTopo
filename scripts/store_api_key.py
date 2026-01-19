@@ -11,7 +11,7 @@ import subprocess
 import sys
 import getpass
 
-SERVICE_NAME = "MeshRepair"
+SERVICE_NAME = "NeuroTopo"
 ACCOUNT_NAME = "OPENAI_API_KEY"
 
 

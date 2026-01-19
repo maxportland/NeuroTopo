@@ -1,4 +1,4 @@
-# MeshRetopo: AI-Assisted Retopology
+# NeuroTopo: AI-Assisted Retopology
 
 Neural-guided, deterministically-controlled mesh retopology for production pipelines with GPT-4o visual quality assessment.
 
@@ -24,14 +24,14 @@ Neural-guided, deterministically-controlled mesh retopology for production pipel
 pip install -e .
 
 # Run retopology on a mesh
-meshretopo process input.obj --target-faces 500 --output output.obj
+neurotopo process input.obj --target-faces 500 --output output.obj
 
 # Use hybrid backend for quad output
-meshretopo process input.obj -t 500 -b hybrid -o output.obj
+neurotopo process input.obj -t 500 -b hybrid -o output.obj
 
 # Auto-tune parameters for best quality
 python -c "
-from meshretopo import auto_retopo, load_mesh
+from neurotopo import auto_retopo, load_mesh
 mesh = load_mesh('input.obj')
 output, score = auto_retopo(mesh, time_budget=60.0)
 print(f'Score: {score.overall_score:.1f}')
@@ -110,22 +110,22 @@ python scripts/run_benchmark.py
 pip install -e ".[dev]"
 
 # Run retopology on a mesh
-meshretopo process input.obj --target-faces 5000 --output output.obj
+neurotopo process input.obj --target-faces 5000 --output output.obj
 
 # Run evaluation
-meshretopo evaluate original.obj retopo.obj
+neurotopo evaluate original.obj retopo.obj
 
 # Run experiment suite
-meshretopo experiment --config experiments/baseline.yaml
+neurotopo experiment --config experiments/baseline.yaml
 
 # Interactive iteration mode
-meshretopo iterate input.obj --cycles 5
+neurotopo iterate input.obj --cycles 5
 ```
 
 ## Project Structure
 
 ```
-src/meshretopo/
+src/neurotopo/
 ├── core/                    # Core mesh data structures
 │   ├── mesh.py             # Unified mesh representation
 │   └── fields.py           # Scalar/vector fields on meshes
@@ -173,7 +173,7 @@ src/meshretopo/
 
 ### Auto-Tuning
 ```python
-from meshretopo import auto_retopo, load_mesh
+from neurotopo import auto_retopo, load_mesh
 
 mesh = load_mesh('input.obj')
 output, score = auto_retopo(mesh, time_budget=60.0)
@@ -182,7 +182,7 @@ print(f'Score: {score.overall_score:.1f}')
 
 ### Pipeline API
 ```python
-from meshretopo import RetopoPipeline, load_mesh
+from neurotopo import RetopoPipeline, load_mesh
 
 mesh = load_mesh('input.obj')
 pipeline = RetopoPipeline(
@@ -199,7 +199,7 @@ print(score.summary())
 Visual quality analysis using GPT-4o to evaluate retopology results:
 
 ```python
-from meshretopo.evaluation import AIQualityAssessor, assess_mesh_quality
+from neurotopo.evaluation import AIQualityAssessor, assess_mesh_quality
 
 # Quick assessment
 report = assess_mesh_quality(
@@ -231,7 +231,7 @@ Features:
 AI-powered region detection for intelligent retopology constraints:
 
 ```python
-from meshretopo.analysis import SemanticSegmenter
+from neurotopo.analysis import SemanticSegmenter
 
 segmenter = SemanticSegmenter()
 regions = segmenter.analyze(mesh_path='character.obj')
@@ -256,18 +256,18 @@ python scripts/store_api_key.py
 
 Or manually:
 ```bash
-security add-generic-password -a "$USER" -s "MeshRepair" -w "your-api-key"
+security add-generic-password -a "$USER" -s "NeuroTopo" -w "your-api-key"
 ```
 
 ### Caching
 
-Results are cached to `~/.cache/meshretopo/` to reduce API costs:
+Results are cached to `~/.cache/neurotopo/` to reduce API costs:
 - `renders/` - Blender-rendered mesh images
 - `api_responses/` - AI analysis results
 
 Clear cache:
 ```bash
-rm -rf ~/.cache/meshretopo/
+rm -rf ~/.cache/neurotopo/
 ```
 
 ## Testing

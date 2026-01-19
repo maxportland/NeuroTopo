@@ -1,6 +1,6 @@
 # Development Notes
 
-Ongoing development log and improvement ideas for MeshRetopo.
+Ongoing development log and improvement ideas for NeuroTopo.
 
 ---
 
@@ -46,7 +46,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 # Run with timing (logs timing, doesn't kill on timeout)
-from meshretopo import RetopoPipeline
+from neurotopo import RetopoPipeline
 pipeline = RetopoPipeline(backend='trimesh', target_faces=1000)
 output, score = pipeline.process(mesh, enable_timing=True)
 
@@ -56,11 +56,11 @@ pipeline.timeout_analysis = 10.0  # Custom 10s timeout for analysis
 output, score = pipeline.process(mesh)
 
 # Configure global timeouts
-from meshretopo.utils.timing import configure_timeouts
+from neurotopo.utils.timing import configure_timeouts
 configure_timeouts(curvature=15.0, features=15.0, remesh=60.0)
 
 # Get timing summary
-from meshretopo.utils.timing import get_timing_log
+from neurotopo.utils.timing import get_timing_log
 print(get_timing_log().summary())
 ```
 

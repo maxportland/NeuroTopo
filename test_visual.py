@@ -2,9 +2,9 @@
 """Test visual evaluation with render output."""
 import os
 import numpy as np
-from meshretopo.core.mesh import Mesh
-from meshretopo import RetopoPipeline
-from meshretopo.evaluation.visual import VisualEvaluator
+from neurotopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
+from neurotopo.evaluation.visual import VisualEvaluator
 
 # Create output directory
 os.makedirs('renders', exist_ok=True)

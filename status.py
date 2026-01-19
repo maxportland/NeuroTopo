@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MeshRetopo Status Report
+NeuroTopo Status Report
 
 Quick overview of the system capabilities and current performance.
 """
@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 
 def main():
-    from meshretopo.test_meshes import create_sphere, create_torus, create_cube
-    from meshretopo.pipeline import RetopoPipeline
-    from meshretopo.remesh import get_remesher
+    from neurotopo.test_meshes import create_sphere, create_torus, create_cube
+    from neurotopo.pipeline import RetopoPipeline
+    from neurotopo.remesh import get_remesher
     
     print("=" * 60)
     print("MESHRETOPO - AI-Assisted Retopology System")
@@ -62,7 +62,7 @@ def main():
     
     # Project stats
     print("\n📁 Project Structure:")
-    src_path = Path(__file__).parent / "src" / "meshretopo"
+    src_path = Path(__file__).parent / "src" / "neurotopo"
     
     py_files = list(src_path.rglob("*.py"))
     total_lines = 0

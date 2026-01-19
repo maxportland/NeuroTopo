@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Test Blender rendering integration."""
 
-from meshretopo.core.mesh import Mesh
-from meshretopo.analysis.semantic import SemanticAnalyzer
-from meshretopo.analysis.blender_render import BlenderRenderer, find_blender
+from neurotopo.core.mesh import Mesh
+from neurotopo.analysis.semantic import SemanticAnalyzer
+from neurotopo.analysis.blender_render import BlenderRenderer, find_blender
 
 # Check Blender
 blender_path = find_blender()

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Analyze mesh structure."""
-from meshretopo.core.mesh import Mesh
-from meshretopo import RetopoPipeline
+from neurotopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
 
 mesh = Mesh.from_file('test_mesh.obj')
 pipeline = RetopoPipeline(backend='hybrid', target_faces=5000)

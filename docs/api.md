@@ -7,7 +7,7 @@
 The fundamental mesh data structure.
 
 ```python
-from meshretopo.core.mesh import Mesh
+from neurotopo.core.mesh import Mesh
 
 # Create from arrays
 mesh = Mesh(
@@ -37,7 +37,7 @@ mesh.copy()             # Deep copy
 Main entry point for retopology.
 
 ```python
-from meshretopo import RetopoPipeline
+from neurotopo import RetopoPipeline
 
 pipeline = RetopoPipeline(
     backend='trimesh',       # 'trimesh', 'hybrid', 'guided_quad', 'isotropic'
@@ -65,8 +65,8 @@ print(score.summary())
 Automatic parameter optimization.
 
 ```python
-from meshretopo import auto_retopo
-from meshretopo.tuning import AutoTuner
+from neurotopo import auto_retopo
+from neurotopo.tuning import AutoTuner
 
 # Simple usage
 output, score = auto_retopo(
@@ -95,7 +95,7 @@ print(f"Best score: {result.best_score}")
 ### Quality Evaluation
 
 ```python
-from meshretopo.evaluation import MeshEvaluator, RetopologyScore
+from neurotopo.evaluation import MeshEvaluator, RetopologyScore
 
 evaluator = MeshEvaluator(sample_count=10000)
 score = evaluator.evaluate(
@@ -128,7 +128,7 @@ score.topology.num_boundaries
 Fast triangle decimation using quadric error metrics.
 
 ```python
-from meshretopo.remesh import TrimeshRemesher
+from neurotopo.remesh import TrimeshRemesher
 
 remesher = TrimeshRemesher()
 result = remesher.remesh(mesh, guidance, target_faces=500)
@@ -138,7 +138,7 @@ result = remesher.remesh(mesh, guidance, target_faces=500)
 Combines triangle decimation with quad conversion.
 
 ```python
-from meshretopo.remesh import HybridRemesher
+from neurotopo.remesh import HybridRemesher
 
 remesher = HybridRemesher(
     quad_ratio=0.8,           # Target % of quads
@@ -151,7 +151,7 @@ remesher = HybridRemesher(
 Direction-field guided quad generation.
 
 ```python
-from meshretopo.remesh import GuidedQuadRemesher
+from neurotopo.remesh import GuidedQuadRemesher
 
 remesher = GuidedQuadRemesher(
     use_direction_field=True,
@@ -165,7 +165,7 @@ remesher = GuidedQuadRemesher(
 Improve quad quality through vertex optimization.
 
 ```python
-from meshretopo.postprocess import QuadOptimizer
+from neurotopo.postprocess import QuadOptimizer
 
 optimizer = QuadOptimizer(
     iterations=10,
@@ -184,7 +184,7 @@ optimized_verts = optimizer.optimize(
 Align edges with direction field.
 
 ```python
-from meshretopo.postprocess import EdgeFlowOptimizer
+from neurotopo.postprocess import EdgeFlowOptimizer
 
 optimizer = EdgeFlowOptimizer(
     iterations=5,
@@ -196,7 +196,7 @@ optimizer = EdgeFlowOptimizer(
 ## Visualization
 
 ```python
-from meshretopo.visualization import (
+from neurotopo.visualization import (
     visualize_mesh,
     visualize_quality_heatmap,
     visualize_comparison,
@@ -219,7 +219,7 @@ save_visualization_report(original, retopo, score, "output_dir")
 ## File I/O
 
 ```python
-from meshretopo.core.io import load_mesh, save_mesh
+from neurotopo.core.io import load_mesh, save_mesh
 
 # Load (supports OBJ, PLY, STL, FBX via trimesh)
 mesh = load_mesh("model.obj")
@@ -232,7 +232,7 @@ save_mesh(mesh, "output.obj")
 ## Test Meshes
 
 ```python
-from meshretopo.test_meshes import (
+from neurotopo.test_meshes import (
     create_sphere,
     create_cube,
     create_torus,

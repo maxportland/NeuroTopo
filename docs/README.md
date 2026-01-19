@@ -1,4 +1,4 @@
-# MeshRetopo Documentation
+# NeuroTopo Documentation
 
 AI-assisted retopology system for generating clean, production-grade low-poly meshes from high-poly inputs.
 
@@ -14,8 +14,8 @@ AI-assisted retopology system for generating clean, production-grade low-poly me
 
 ### Getting Started
 ```python
-from meshretopo import RetopoPipeline, auto_retopo
-from meshretopo.core.io import load_mesh
+from neurotopo import RetopoPipeline, auto_retopo
+from neurotopo.core.io import load_mesh
 
 # Load a mesh
 mesh = load_mesh('input.obj')

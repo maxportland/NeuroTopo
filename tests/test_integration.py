@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-MeshRetopo Integration Tests
+NeuroTopo Integration Tests
 
 Validates the complete retopology pipeline with various test cases.
 """
@@ -8,14 +8,14 @@ Validates the complete retopology pipeline with various test cases.
 import pytest
 import numpy as np
 
-from meshretopo.core.mesh import Mesh
-from meshretopo.test_meshes import (
+from neurotopo.core.mesh import Mesh
+from neurotopo.test_meshes import (
     create_sphere, create_cube, create_torus, 
     create_cylinder, create_cone, create_bunny_like
 )
-from meshretopo.pipeline import RetopoPipeline
-from meshretopo.evaluation import MeshEvaluator, RetopologyScore
-from meshretopo.tuning import auto_retopo, AutoTuner
+from neurotopo.pipeline import RetopoPipeline
+from neurotopo.evaluation import MeshEvaluator, RetopologyScore
+from neurotopo.tuning import auto_retopo, AutoTuner
 
 
 class TestMeshCreation:

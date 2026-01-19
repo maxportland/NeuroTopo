@@ -1,6 +1,6 @@
 # 3D Mesh Topology Guidelines
 
-This document summarizes best practices for ideal 3D model topology, with special focus on human character modeling and face topology. These guidelines inform the quality metrics and evaluation criteria used in the MeshRetopo system.
+This document summarizes best practices for ideal 3D model topology, with special focus on human character modeling and face topology. These guidelines inform the quality metrics and evaluation criteria used in the NeuroTopo system.
 
 ## Table of Contents
 1. [Core Topology Principles](#core-topology-principles)
@@ -393,7 +393,7 @@ Based on the research, ideal topology should score well on:
 
 ---
 
-## Applying to MeshRetopo
+## Applying to NeuroTopo
 
 These guidelines inform our quality evaluation metrics:
 
@@ -440,7 +440,7 @@ Based on this research, the following enhancements have been implemented:
 ### Usage
 
 ```python
-from meshretopo import RetopoPipeline
+from neurotopo import RetopoPipeline
 
 # Enable AI semantic analysis
 pipeline = RetopoPipeline(
@@ -475,5 +475,5 @@ Use these as visual references when evaluating retopology output quality.
 
 ---
 
-*Document compiled from industry resources and academic references for the MeshRetopo project.*
+*Document compiled from industry resources and academic references for the NeuroTopo project.*
 *Last updated: January 2026*

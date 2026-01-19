@@ -43,10 +43,10 @@ def run_iteration_cycle(
     
     Each cycle tests a different configuration to explore the parameter space.
     """
-    from meshretopo import Mesh
-    from meshretopo.test_meshes import create_sphere, create_torus
-    from meshretopo.pipeline import RetopoPipeline
-    from meshretopo.experiments import ExperimentConfig
+    from neurotopo import Mesh
+    from neurotopo.test_meshes import create_sphere, create_torus
+    from neurotopo.pipeline import RetopoPipeline
+    from neurotopo.experiments import ExperimentConfig
     
     # Load or create input mesh
     if mesh_path:

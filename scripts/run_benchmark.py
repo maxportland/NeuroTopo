@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Comprehensive benchmark script for MeshRetopo system."""
+"""Comprehensive benchmark script for NeuroTopo system."""
 
-from meshretopo.test_meshes import (
+from neurotopo.test_meshes import (
     create_sphere, create_cube, create_torus, create_cylinder,
     create_cone, create_bunny_like, create_mechanical_part
 )
-from meshretopo.pipeline import RetopoPipeline
+from neurotopo.pipeline import RetopoPipeline
 
 
 def run_benchmark():

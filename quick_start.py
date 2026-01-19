@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quick Start Script for MeshRetopo
+Quick Start Script for NeuroTopo
 
 This script demonstrates the full pipeline and helps verify installation.
 Run this after installing the package to test everything works.
@@ -11,16 +11,16 @@ from pathlib import Path
 
 def main():
     print("=" * 60)
-    print("MeshRetopo Quick Start")
+    print("NeuroTopo Quick Start")
     print("=" * 60)
     
     # Add src to path for development
     src_path = Path(__file__).parent / "src"
     sys.path.insert(0, str(src_path))
     
-    from meshretopo import Mesh, RetopoPipeline
-    from meshretopo.test_meshes import create_sphere, create_torus, get_test_meshes
-    from meshretopo.evaluation import evaluate_retopology
+    from neurotopo import Mesh, RetopoPipeline
+    from neurotopo.test_meshes import create_sphere, create_torus, get_test_meshes
+    from neurotopo.evaluation import evaluate_retopology
     
     # Create output directory
     output_dir = Path("quick_start_output")
@@ -114,8 +114,8 @@ def main():
     print("\nNext steps:")
     print("  1. Review the output meshes in a 3D viewer")
     print("  2. Try different configurations in experiments/")
-    print("  3. Run: meshretopo --help for CLI options")
-    print("  4. Modify neural analyzers in src/meshretopo/analysis/neural/")
+    print("  3. Run: neurotopo --help for CLI options")
+    print("  4. Modify neural analyzers in src/neurotopo/analysis/neural/")
 
 
 if __name__ == "__main__":

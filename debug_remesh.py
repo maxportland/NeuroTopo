@@ -2,8 +2,8 @@
 """Debug the remesh pipeline."""
 import traceback
 import numpy as np
-from meshretopo.core.mesh import Mesh
-from meshretopo import RetopoPipeline
+from neurotopo.core.mesh import Mesh
+from neurotopo import RetopoPipeline
 
 try:
     mesh = Mesh.from_file('test_mesh.obj')

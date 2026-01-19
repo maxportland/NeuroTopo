@@ -2,10 +2,10 @@
 """Profile the retopology pipeline to find bottlenecks."""
 
 import time
-from meshretopo.core.io import load_mesh
-from meshretopo.analysis import detect_features, create_default_analyzer
-from meshretopo.guidance import GuidanceComposer
-from meshretopo.remesh import get_remesher
+from neurotopo.core.io import load_mesh
+from neurotopo.analysis import detect_features, create_default_analyzer
+from neurotopo.guidance import GuidanceComposer
+from neurotopo.remesh import get_remesher
 
 
 def profile_pipeline(mesh_path: str, reduction: float = 0.02):
@@ -74,5 +74,5 @@ def profile_pipeline(mesh_path: str, reduction: float = 0.02):
 
 if __name__ == '__main__':
     import sys
-    mesh_path = sys.argv[1] if len(sys.argv) > 1 else '/Users/maxdavis/Projects/MeshRepair/test_mesh.fbx'
+    mesh_path = sys.argv[1] if len(sys.argv) > 1 else '/Users/maxdavis/Projects/NeuroTopo/test_mesh.fbx'
     profile_pipeline(mesh_path)

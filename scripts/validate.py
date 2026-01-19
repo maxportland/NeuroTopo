@@ -1,27 +1,27 @@
 #!/usr/bin/env python
-"""MeshRetopo system validation script."""
+"""NeuroTopo system validation script."""
 
 def main():
     print('=' * 60)
-    print('MeshRetopo System Validation')
+    print('NeuroTopo System Validation')
     print('=' * 60)
     print()
 
     # Test imports
     print('Testing imports...')
-    from meshretopo import RetopoPipeline, auto_retopo
-    from meshretopo.core.mesh import Mesh
-    from meshretopo.evaluation import MeshEvaluator
-    from meshretopo.tuning import AutoTuner
-    from meshretopo.remesh import get_remesher, HybridRemesher
-    from meshretopo.postprocess import QuadOptimizer
-    from meshretopo.visualization import visualize_mesh
+    from neurotopo import RetopoPipeline, auto_retopo
+    from neurotopo.core.mesh import Mesh
+    from neurotopo.evaluation import MeshEvaluator
+    from neurotopo.tuning import AutoTuner
+    from neurotopo.remesh import get_remesher, HybridRemesher
+    from neurotopo.postprocess import QuadOptimizer
+    from neurotopo.visualization import visualize_mesh
     print('  All imports OK')
     print()
 
     # Test mesh creation
     print('Testing mesh creation...')
-    from meshretopo.test_meshes import create_sphere, create_cube, create_bunny_like
+    from neurotopo.test_meshes import create_sphere, create_cube, create_bunny_like
     sphere = create_sphere(subdivisions=3)
     cube = create_cube(subdivisions=2)
     bunny = create_bunny_like()

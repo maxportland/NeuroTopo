@@ -4,8 +4,8 @@
 import os
 import base64
 from openai import OpenAI
-from meshretopo.core.mesh import Mesh
-from meshretopo.analysis.blender_render import BlenderRenderer
+from neurotopo.core.mesh import Mesh
+from neurotopo.analysis.blender_render import BlenderRenderer
 
 # Load mesh info
 mesh = Mesh.from_file('test_mesh.obj')

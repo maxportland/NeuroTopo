@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "description": "Test harness configuration for MeshRepair",
+  "description": "Test harness configuration for NeuroTopo",
   
   "defaults": {
     "api_provider": "openai",
@@ -10,7 +10,7 @@
     "use_blender": true,
     "blender_path": "/Applications/Blender.app/Contents/MacOS/blender",
     "cache_enabled": true,
-    "cache_dir": ".cache/meshretopo",
+    "cache_dir": ".cache/neurotopo",
     "timeout_seconds": 300
   },
   
