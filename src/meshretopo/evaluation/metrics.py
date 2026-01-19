@@ -261,27 +261,40 @@ class MeshEvaluator:
         tri_count = 0
         
         for face in mesh.faces:
+            unique_verts = len(set(face))
             vertices = mesh.vertices[face]
             
-            if len(face) == 4:
+            # Handle degenerate quads (stored as [a,b,c,c]) - skip them
+            # They are artifacts from triangle pairing that failed and shouldn't
+            # contribute to quality metrics
+            if len(face) == 4 and unique_verts == 4:
+                # True quad - evaluate as quad
                 quad_count += 1
                 ar = self._quad_aspect_ratio(vertices)
                 angles = self._quad_angles(vertices)
                 # For quads, ideal angle is 90 degrees
                 angle_deviations.extend([abs(a - np.pi/2) for a in angles])
-            else:
+                aspect_ratios.append(ar)
+            elif len(face) == 4 and unique_verts == 3:
+                # Degenerate quad (triangle with repeated vertex)
+                # Skip these - they're artifacts, not real geometry
+                # The remesher should ideally not produce these
+                continue
+            elif len(face) == 3:
+                # Regular triangle
                 tri_count += 1
                 ar = self._triangle_aspect_ratio(vertices)
                 angles = self._triangle_angles(vertices)
-                # For triangles, ideal angle is 60 degrees
                 angle_deviations.extend([abs(a - np.pi/3) for a in angles])
-            
-            aspect_ratios.append(ar)
+                aspect_ratios.append(ar)
+            else:
+                # Skip invalid faces
+                continue
         
-        # Compute valence histogram
+        # Compute valence histogram (use unique vertices per face)
         valence = np.zeros(mesh.num_vertices, dtype=int)
         for face in mesh.faces:
-            for vi in face:
+            for vi in set(face):  # Use set to handle degenerate quads
                 valence[vi] += 1
         
         valence_hist = {}

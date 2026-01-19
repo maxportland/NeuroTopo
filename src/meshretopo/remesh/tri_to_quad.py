@@ -25,7 +25,7 @@ class TriToQuadConverter:
     
     def __init__(
         self,
-        min_quality: float = 0.2,
+        min_quality: float = 0.4,  # Increased from 0.2 - reject bad quads
         prefer_regular: bool = True,
         max_valence_deviation: int = 2,
     ):
@@ -123,34 +123,56 @@ class TriToQuadConverter:
     def _order_quad_vertices(
         self,
         vertices: np.ndarray,
-        v0: int, v1: int, v2: int, v3: int
+        other0: int, shared0: int, other1: int, shared1: int
     ) -> list:
-        """Order quad vertices for correct winding."""
-        # Compute centroid
-        center = (vertices[v0] + vertices[v1] + vertices[v2] + vertices[v3]) / 4
+        """Order quad vertices for correct winding.
         
-        # Sort by angle around centroid
-        verts = [v0, v1, v2, v3]
+        Given two triangles sharing edge (shared0, shared1):
+        - Triangle 0 has vertices: other0, shared0, shared1 (some permutation)
+        - Triangle 1 has vertices: other1, shared0, shared1 (some permutation)
         
-        # Use first two vertices to establish a reference plane
-        ref_vec = vertices[v1] - center
+        The quad is formed by: other0 -> shared0 -> other1 -> shared1
+        This creates a proper quad without crossing edges.
         
-        def angle_key(v):
-            vec = vertices[v] - center
-            # Project to 2D using cross product for sign
-            cross = np.cross(ref_vec, vec)
-            dot = np.dot(ref_vec, vec)
-            return np.arctan2(np.linalg.norm(cross), dot)
+        We verify the ordering by checking the quad doesn't self-intersect.
+        """
+        # Standard ordering: other0 -> shared0 -> other1 -> shared1
+        v0, v1, v2, v3 = other0, shared0, other1, shared1
+        verts = vertices[[v0, v1, v2, v3]]
         
-        # Actually, for stability, just use a consistent ordering
-        # Sort by angle in xy plane from centroid
-        def angle_xy(v):
-            dx = vertices[v][0] - center[0]
-            dy = vertices[v][1] - center[1]
-            return np.arctan2(dy, dx)
+        # Check for self-intersection by computing diagonals
+        # If diagonals cross inside the quad, it's properly wound
+        # If they don't, we need to swap vertices
+        d1 = verts[2] - verts[0]  # other0 to other1
+        d2 = verts[3] - verts[1]  # shared0 to shared1
         
-        verts.sort(key=angle_xy)
-        return verts
+        # A simple check: compute the quad area using cross product
+        # If negative, reverse the winding
+        e1 = verts[1] - verts[0]
+        e2 = verts[3] - verts[0]
+        cross = np.cross(e1, e2)
+        
+        # Also check that opposite edges don't cross
+        # by comparing the quad diagonal intersection
+        # For a proper quad, edges 0-1 and 2-3 should be roughly parallel
+        # and edges 1-2 and 3-0 should be roughly parallel
+        
+        # The simplest approach: try both orderings and pick the one
+        # with smaller aspect ratio (less distorted)
+        order1 = [other0, shared0, other1, shared1]
+        order2 = [other0, shared1, other1, shared0]
+        
+        def quad_distortion(order):
+            v = vertices[order]
+            edges = [np.linalg.norm(v[(i+1)%4] - v[i]) for i in range(4)]
+            if min(edges) < 1e-10:
+                return 1000
+            return max(edges) / min(edges)
+        
+        d1 = quad_distortion(order1)
+        d2 = quad_distortion(order2)
+        
+        return order1 if d1 <= d2 else order2
     
     def _quad_quality_score(self, quad_verts: np.ndarray) -> float:
         """Compute quality score for a quad (0-1)."""

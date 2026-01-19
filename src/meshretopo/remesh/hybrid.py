@@ -67,24 +67,41 @@ class HybridRemesher(Remesher):
             tri_mesh = mesh.triangulate() if not mesh.is_triangular else mesh
             verts, faces = self._fast_decimate(tri_mesh, target_tris)
             
+            # Step 1.5: Improve triangle quality with edge relaxation
+            try:
+                verts, faces = self._improve_triangles(verts, faces, iterations=20)
+            except Exception as e:
+                logger.debug(f"Triangle improvement failed: {e}")
+            
             # Step 2: Convert triangles to quads
-            converter = TriToQuadConverter(min_quality=0.2, prefer_regular=True)
+            converter = TriToQuadConverter(min_quality=0.45, prefer_regular=True)
             verts, quad_faces, remaining_tris = converter.convert(verts, faces)
             
-            # Build output - quads and remaining triangles as degenerate quads
+            # Build output - store quads and triangles separately
+            # Use object array to allow mixed face sizes
             all_faces = []
             
             for qf in quad_faces:
-                all_faces.append(qf)  # Quad as 4 vertices
+                all_faces.append(np.array(qf, dtype=np.int32))  # Quad as 4 vertices
             
             for tf in remaining_tris:
-                # Degenerate quad: repeat last vertex
-                all_faces.append([tf[0], tf[1], tf[2], tf[2]])
+                all_faces.append(np.array(tf, dtype=np.int32))  # Triangle as 3 vertices
             
-            faces = np.array(all_faces)
+            # For now, still need to convert to homogeneous array for Mesh class
+            # Convert triangles to degenerate quads for compatibility
+            homo_faces = []
+            for face in all_faces:
+                if len(face) == 4:
+                    homo_faces.append(face)
+                elif len(face) == 3:
+                    # Store as degenerate quad for array compatibility
+                    homo_faces.append([face[0], face[1], face[2], face[2]])
+            
+            faces = np.array(homo_faces, dtype=np.int32)
             
             # Step 3: Light optimization (only if small enough)
-            if len(faces) < 20000 and self.optimization_passes > 0:
+            # Skip for large meshes - the optimizer is too slow
+            if len(faces) < 5000 and self.optimization_passes > 0:
                 try:
                     import trimesh
                     original_tm = trimesh.Trimesh(
@@ -206,3 +223,56 @@ class HybridRemesher(Remesher):
         except Exception as e:
             logger.warning(f"Decimation failed: {e}, returning original")
             return mesh.vertices.copy(), mesh.faces.copy()
+    
+    def _improve_triangles(
+        self,
+        vertices: np.ndarray,
+        faces: np.ndarray,
+        iterations: int = 5
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Improve triangle quality with Laplacian smoothing.
+        
+        Makes triangles more equilateral, which leads to better quads when paired.
+        """
+        verts = vertices.copy()
+        faces = np.array(faces)
+        
+        # Build adjacency
+        from collections import defaultdict
+        
+        neighbors = defaultdict(set)
+        edge_count = defaultdict(int)
+        
+        for face in faces:
+            for i in range(3):
+                v0, v1 = int(face[i]), int(face[(i+1) % 3])
+                neighbors[v0].add(v1)
+                neighbors[v1].add(v0)
+                e = tuple(sorted([v0, v1]))
+                edge_count[e] += 1
+        
+        # Identify boundary vertices
+        boundary_verts = set()
+        for e, count in edge_count.items():
+            if count == 1:
+                boundary_verts.add(e[0])
+                boundary_verts.add(e[1])
+        
+        # Laplacian smoothing
+        for _ in range(iterations):
+            new_verts = verts.copy()
+            for vi in range(len(verts)):
+                if vi in boundary_verts:
+                    continue
+                if len(neighbors[vi]) == 0:
+                    continue
+                    
+                # Uniform Laplacian: average of neighbors
+                neighbor_pos = verts[list(neighbors[vi])]
+                centroid = neighbor_pos.mean(axis=0)
+                # Blend: move 30% toward centroid
+                new_verts[vi] = verts[vi] * 0.7 + centroid * 0.3
+            
+            verts = new_verts
+        
+        return verts, faces
