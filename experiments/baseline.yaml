@@ -1,0 +1,46 @@
+# Baseline Experiment Configuration
+# Use this as a starting point for experiments
+
+name: baseline_v1
+description: "Baseline configuration for retopology evaluation"
+
+# Input meshes (relative or absolute paths)
+input_meshes:
+  - test_meshes/sphere_high.obj
+  - test_meshes/torus.obj
+  - test_meshes/cube_high.obj
+
+output_dir: outputs/baseline_v1
+
+# Analysis pipeline configuration
+analysis:
+  neural_weight: 0.7        # Weight for neural-predicted sizing
+  feature_weight: 0.3       # Weight for feature-based sizing
+  curvature_sensitivity: 1.0
+  smoothing_iterations: 3
+  feature_angle_threshold: 30.0  # degrees
+
+# Remeshing configuration
+remesh:
+  backend: pymeshlab        # Options: pymeshlab, pymeshlab_quad, guided_quad
+  target_faces: null        # null = auto-determine
+  target_reduction: 0.1     # Reduce to 10% of original faces
+  iterations: 3
+  adaptive: true
+  preserve_boundary: true
+  optimization_iterations: 10
+
+# Evaluation configuration
+evaluation:
+  sample_count: 10000       # Points to sample for distance metrics
+  quad_weight: 0.4          # Weight for quad quality in overall score
+  fidelity_weight: 0.4      # Weight for geometric fidelity
+  topology_weight: 0.2      # Weight for topology metrics
+
+# Iteration settings
+auto_iterate: false
+max_iterations: 5
+target_score: 80.0
+
+# Reproducibility
+seed: 42
