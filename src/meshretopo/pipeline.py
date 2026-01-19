@@ -40,6 +40,9 @@ class RetopoPipeline:
         neural_weight: float = 0.7,
         feature_weight: float = 0.3,
         preserve_boundary: bool = True,
+        semantic_analysis: bool = False,
+        semantic_api_provider: str = "openai",
+        semantic_model: Optional[str] = None,
     ):
         """
         Initialize pipeline.
@@ -50,12 +53,18 @@ class RetopoPipeline:
             neural_weight: Weight for neural guidance (0-1)
             feature_weight: Weight for feature preservation (0-1)
             preserve_boundary: Preserve mesh boundaries
+            semantic_analysis: Enable AI-powered semantic segmentation
+            semantic_api_provider: Vision API provider ("openai" or "anthropic")
+            semantic_model: Specific model to use (default: auto-select)
         """
         self.backend = backend
         self.target_faces = target_faces
         self.neural_weight = neural_weight
         self.feature_weight = feature_weight
         self.preserve_boundary = preserve_boundary
+        self.semantic_analysis = semantic_analysis
+        self.semantic_api_provider = semantic_api_provider
+        self.semantic_model = semantic_model
         
         # Timeout configuration (can be overridden per-instance)
         self.timeout_analysis = TIMEOUT_CURVATURE
@@ -115,6 +124,30 @@ class RetopoPipeline:
         
         logger.info(f"Processing mesh: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
         
+        # Optional semantic analysis for topology-aware remeshing
+        semantic_guidance = None
+        if self.semantic_analysis:
+            with timed_operation("semantic_analysis", log=enable_timing):
+                try:
+                    from meshretopo.analysis.semantic import SemanticAnalyzer
+                    from meshretopo.guidance.semantic import SemanticGuidanceGenerator
+                    
+                    logger.info("Running AI semantic analysis...")
+                    analyzer = SemanticAnalyzer(
+                        api_provider=self.semantic_api_provider,
+                        model=self.semantic_model,
+                    )
+                    segmentation = analyzer.analyze(mesh)
+                    
+                    if segmentation.segments:
+                        logger.info(f"Detected {len(segmentation.segments)} semantic regions")
+                        generator = SemanticGuidanceGenerator()
+                        semantic_guidance = generator.generate(mesh, segmentation)
+                    else:
+                        logger.info("No semantic regions detected")
+                except Exception as e:
+                    logger.warning(f"Semantic analysis failed: {e}")
+        
         # Analysis with timing and optional timeout enforcement
         with timed_operation("analysis", log=enable_timing):
             if do_enforce:
@@ -137,13 +170,17 @@ class RetopoPipeline:
             else:
                 features = detect_features(mesh)
         
-        # Compose guidance
+        # Compose guidance (enhanced with semantic info if available)
         with timed_operation("guidance_composition", log=enable_timing):
             target = target_faces or self.target_faces
             guidance = self.composer.compose(
                 mesh, prediction, features,
                 target_faces=target
             )
+            
+            # Blend semantic guidance if available
+            if semantic_guidance is not None:
+                guidance = self._blend_semantic_guidance(guidance, semantic_guidance)
         
         # Remesh with timing
         with timed_operation("remeshing", log=enable_timing):
@@ -160,6 +197,24 @@ class RetopoPipeline:
             raise RuntimeError(f"Remeshing failed: {result.metadata.get('error', 'unknown')}")
         
         output_mesh = result.mesh
+        
+        # Ensure manifold mesh
+        with timed_operation("manifold_repair", log=enable_timing):
+            try:
+                from meshretopo.postprocess.manifold import ManifoldRepair
+                repair = ManifoldRepair(verbose=False)
+                repaired_verts, repaired_faces = repair.repair(
+                    output_mesh.vertices.copy(),
+                    output_mesh.faces.copy()
+                )
+                output_mesh = Mesh(
+                    vertices=repaired_verts,
+                    faces=repaired_faces,
+                    name=output_mesh.name
+                )
+                logger.debug(f"Manifold repair: {len(repaired_faces)} faces")
+            except Exception as e:
+                logger.warning(f"Manifold repair failed: {e}")
         
         # Optional edge flow optimization
         if edge_flow_optimization and guidance.direction_field is not None:
@@ -214,6 +269,53 @@ class RetopoPipeline:
             logger.info(timing_log.summary())
         
         return output_mesh, score
+    
+    def _blend_semantic_guidance(
+        self,
+        guidance: GuidanceFields,
+        semantic: 'SemanticGuidanceFields'
+    ) -> GuidanceFields:
+        """
+        Blend semantic guidance into standard guidance fields.
+        
+        Adjusts the size field based on semantic density requirements
+        and stores semantic info for the remesher to use.
+        """
+        import numpy as np
+        from meshretopo.core.fields import ScalarField, FieldLocation
+        
+        # Blend size field with semantic density
+        # Higher density regions -> smaller quads
+        density = semantic.density_field.values
+        density_factor = 1.0 / np.clip(density, 0.5, 2.0)  # Invert density
+        
+        # Ensure arrays are same length (interpolate if needed)
+        if len(density_factor) != len(guidance.size_field.values):
+            # Use nearest neighbor interpolation for now
+            if len(density_factor) > len(guidance.size_field.values):
+                density_factor = density_factor[:len(guidance.size_field.values)]
+            else:
+                # Extend with 1.0 (neutral)
+                density_factor = np.concatenate([
+                    density_factor,
+                    np.ones(len(guidance.size_field.values) - len(density_factor))
+                ])
+        
+        blended_sizes = guidance.size_field.values * density_factor
+        blended_size_field = ScalarField(
+            blended_sizes,
+            FieldLocation.VERTEX,
+            "semantic_blended_size"
+        )
+        
+        # Create new guidance with blended size
+        return GuidanceFields(
+            size_field=blended_size_field,
+            direction_field=guidance.direction_field,
+            importance_field=guidance.importance_field,
+            target_face_count=guidance.target_face_count,
+            symmetry_plane=guidance.symmetry_plane,
+        )
     
     def iterate(
         self,

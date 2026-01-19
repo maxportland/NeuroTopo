@@ -16,6 +16,14 @@ from meshretopo.evaluation.visualize import (
     MeshVisualizer,
     visualize_comparison,
 )
+from meshretopo.evaluation.ai_quality import (
+    AIQualityAssessor,
+    AIQualityReport,
+    TopologyIssue,
+    IssueSeverity,
+    IssueCategory,
+    assess_mesh_quality,
+)
 
 __all__ = [
     "MeshEvaluator",
@@ -28,4 +36,11 @@ __all__ = [
     "evaluate_retopology",
     "MeshVisualizer",
     "visualize_comparison",
+    # AI quality assessment
+    "AIQualityAssessor",
+    "AIQualityReport",
+    "TopologyIssue",
+    "IssueSeverity",
+    "IssueCategory",
+    "assess_mesh_quality",
 ]

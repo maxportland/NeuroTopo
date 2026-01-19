@@ -74,7 +74,7 @@ class HybridRemesher(Remesher):
                 logger.debug(f"Triangle improvement failed: {e}")
             
             # Step 2: Convert triangles to quads
-            converter = TriToQuadConverter(min_quality=0.45, prefer_regular=True)
+            converter = TriToQuadConverter(min_quality=0.35, prefer_regular=True)
             verts, quad_faces, remaining_tris = converter.convert(verts, faces)
             
             # Build output - store quads and triangles separately
@@ -101,7 +101,7 @@ class HybridRemesher(Remesher):
             
             # Step 3: Light optimization (only if small enough)
             # Skip for large meshes - the optimizer is too slow
-            if len(faces) < 5000 and self.optimization_passes > 0:
+            if len(faces) < 3000 and self.optimization_passes > 0:
                 try:
                     import trimesh
                     original_tm = trimesh.Trimesh(
@@ -112,13 +112,18 @@ class HybridRemesher(Remesher):
                     
                     from meshretopo.postprocess import QuadOptimizer
                     optimizer = QuadOptimizer(
-                        iterations=self.optimization_passes,
+                        iterations=min(self.optimization_passes, 2),
                         smoothing_weight=0.3,
                         surface_weight=0.7,
                     )
                     verts = optimizer.optimize(verts, faces, original_tm)
                 except Exception as opt_err:
                     logger.debug(f"Optimization skipped: {opt_err}")
+            
+            # Final manifold repair after all processing
+            from meshretopo.postprocess.manifold import ManifoldRepair
+            repair = ManifoldRepair(verbose=False)
+            verts, faces = repair.repair(verts, faces)
             
             output = Mesh(
                 vertices=verts,

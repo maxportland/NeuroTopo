@@ -1,0 +1,100 @@
+{
+  "version": "1.0",
+  "description": "Test harness configuration for MeshRepair",
+  
+  "defaults": {
+    "api_provider": "openai",
+    "model": "gpt-4o",
+    "resolution": [1024, 1024],
+    "num_views": 6,
+    "use_blender": true,
+    "blender_path": "/Applications/Blender.app/Contents/MacOS/blender",
+    "cache_enabled": true,
+    "cache_dir": ".cache/meshretopo",
+    "timeout_seconds": 300
+  },
+  
+  "test_meshes": [
+    {
+      "name": "test_mesh",
+      "path": "test_mesh.obj",
+      "description": "Human head mesh for testing",
+      "expected_regions": ["head", "eye", "nose", "mouth"],
+      "retopology": {
+        "target_faces": 5000,
+        "backend": "hybrid"
+      }
+    }
+  ],
+  
+  "test_suites": {
+    "quick": {
+      "description": "Quick smoke test",
+      "meshes": ["test_mesh"],
+      "tests": ["semantic_analysis"],
+      "settings": {
+        "num_views": 2,
+        "resolution": [512, 512]
+      }
+    },
+    
+    "semantic": {
+      "description": "Full semantic analysis test",
+      "meshes": ["test_mesh"],
+      "tests": ["semantic_analysis", "segment_validation"],
+      "settings": {
+        "num_views": 6,
+        "resolution": [1024, 1024]
+      }
+    },
+    
+    "retopology": {
+      "description": "Retopology pipeline test",
+      "meshes": ["test_mesh"],
+      "tests": ["retopology", "quality_evaluation"],
+      "settings": {}
+    },
+    
+    "ai_quality": {
+      "description": "AI visual quality assessment test",
+      "meshes": ["test_mesh"],
+      "tests": ["retopology", "ai_quality_assessment"],
+      "settings": {
+        "num_views": 4,
+        "wireframe_mode": true
+      }
+    },
+    
+    "full": {
+      "description": "Complete pipeline test",
+      "meshes": ["test_mesh"],
+      "tests": ["semantic_analysis", "segment_validation", "retopology", "quality_evaluation"],
+      "settings": {}
+    },
+    
+    "full_with_ai": {
+      "description": "Complete pipeline with AI quality assessment",
+      "meshes": ["test_mesh"],
+      "tests": ["semantic_analysis", "segment_validation", "retopology", "quality_evaluation", "ai_quality_assessment"],
+      "settings": {}
+    }
+  },
+  
+  "quality_thresholds": {
+    "min_overall_score": 40.0,
+    "min_quad_quality": 10.0,
+    "min_fidelity": 50.0,
+    "min_topology": 80.0,
+    "max_hausdorff": 20.0,
+    "min_coverage": 85.0,
+    "min_ai_quality_score": 50.0
+  },
+  
+  "output": {
+    "results_dir": "results",
+    "save_renders": true,
+    "save_retopo_mesh": true,
+    "save_reports": true,
+    "log_level": "INFO"
+  }
+}

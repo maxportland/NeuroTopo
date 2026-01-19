@@ -18,6 +18,12 @@ from meshretopo.utils.timing import (
     TIMEOUT_OPTIMIZATION,
     TIMEOUT_AUTOTUNER_ITERATION,
 )
+from meshretopo.utils.keychain import (
+    get_from_keychain,
+    get_openai_api_key,
+    get_anthropic_api_key,
+    ensure_api_key,
+)
 
 __all__ = [
     "TimeoutError",
@@ -36,4 +42,8 @@ __all__ = [
     "TIMEOUT_EVALUATION",
     "TIMEOUT_OPTIMIZATION",
     "TIMEOUT_AUTOTUNER_ITERATION",
+    "get_from_keychain",
+    "get_openai_api_key",
+    "get_anthropic_api_key",
+    "ensure_api_key",
 ]

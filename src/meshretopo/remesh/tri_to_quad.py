@@ -25,13 +25,15 @@ class TriToQuadConverter:
     
     def __init__(
         self,
-        min_quality: float = 0.4,  # Increased from 0.2 - reject bad quads
+        min_quality: float = 0.40,  # Balance quality vs quantity
         prefer_regular: bool = True,
         max_valence_deviation: int = 2,
+        edge_swap_iterations: int = 0,  # Disabled - slow and can cause manifold issues
     ):
         self.min_quality = min_quality
         self.prefer_regular = prefer_regular
         self.max_valence_deviation = max_valence_deviation
+        self.edge_swap_iterations = edge_swap_iterations
     
     def convert(
         self,
@@ -50,6 +52,10 @@ class TriToQuadConverter:
         Returns:
             (vertices, quad_faces, remaining_tris)
         """
+        # Pre-process: edge swapping to improve pairing potential
+        if self.edge_swap_iterations > 0:
+            faces = self._optimize_edges(vertices, faces)
+        
         # Build topology
         edge_faces = self._build_edge_face_map(faces)
         
@@ -64,6 +70,91 @@ class TriToQuadConverter:
         )
         
         return vertices, quads, remaining_tris
+    
+    def _optimize_edges(self, vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
+        """
+        Optimize triangle edges for better quad pairing.
+        
+        Swaps edges to create more equilateral triangles and better
+        quad formation potential. Uses Delaunay-like criterion.
+        """
+        faces = [list(f) for f in faces]
+        
+        for iteration in range(self.edge_swap_iterations):
+            swaps = 0
+            edge_faces = self._build_edge_face_map(np.array(faces))
+            
+            # Check each internal edge for potential swap
+            for edge, face_list in edge_faces.items():
+                if len(face_list) != 2:
+                    continue
+                
+                f0, f1 = face_list
+                face0, face1 = faces[f0], faces[f1]
+                
+                # Get vertices
+                v0, v1 = edge
+                other0 = [v for v in face0 if v not in edge][0]
+                other1 = [v for v in face1 if v not in edge][0]
+                
+                # Current configuration quality
+                current_quality = self._config_quality(
+                    vertices, v0, v1, other0, other1, 'edge'
+                )
+                
+                # Swapped configuration quality
+                swapped_quality = self._config_quality(
+                    vertices, v0, v1, other0, other1, 'diagonal'
+                )
+                
+                # Swap if it improves quality significantly
+                if swapped_quality > current_quality + 0.1:
+                    # Swap: new triangles are (other0, v0, other1) and (other0, other1, v1)
+                    faces[f0] = [other0, v0, other1]
+                    faces[f1] = [other0, other1, v1]
+                    swaps += 1
+            
+            if swaps == 0:
+                break
+        
+        return np.array(faces, dtype=np.int32)
+    
+    def _config_quality(
+        self, 
+        vertices: np.ndarray, 
+        v0: int, v1: int, 
+        other0: int, other1: int,
+        config: str
+    ) -> float:
+        """Compute quality of a triangle pair configuration."""
+        if config == 'edge':
+            # Current: triangles share edge (v0, v1)
+            t1 = [other0, v0, v1]
+            t2 = [other1, v0, v1]
+        else:
+            # Swapped: triangles share edge (other0, other1)
+            t1 = [other0, v0, other1]
+            t2 = [other0, other1, v1]
+        
+        # Compute triangle quality (closer to equilateral is better)
+        def tri_quality(tri):
+            p = vertices[tri]
+            edges = [np.linalg.norm(p[(i+1)%3] - p[i]) for i in range(3)]
+            if min(edges) < 1e-10:
+                return 0
+            # Quality: ratio of circumradius to twice inradius
+            # For equilateral, this is 1. Lower is worse.
+            s = sum(edges) / 2  # Semi-perimeter
+            area = 0.25 * np.sqrt(abs((edges[0]+edges[1]+edges[2]) * 
+                                     (-edges[0]+edges[1]+edges[2]) *
+                                     (edges[0]-edges[1]+edges[2]) * 
+                                     (edges[0]+edges[1]-edges[2])))
+            if area < 1e-10:
+                return 0
+            # Aspect ratio
+            return min(edges) / max(edges)
+        
+        return (tri_quality(t1) + tri_quality(t2)) / 2
     
     def _build_edge_face_map(self, faces: np.ndarray) -> dict:
         """Map edges to adjacent faces."""

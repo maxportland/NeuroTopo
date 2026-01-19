@@ -88,6 +88,22 @@ class TrimeshRemesher(Remesher):
                 name=f"{mesh.name}_remeshed"
             )
             
+            # Repair manifold issues
+            try:
+                from meshretopo.postprocess.manifold import ManifoldRepair
+                repair = ManifoldRepair(verbose=False)
+                repaired_verts, repaired_faces = repair.repair(
+                    output.vertices.copy(),
+                    output.faces.copy()
+                )
+                output = Mesh(
+                    vertices=repaired_verts,
+                    faces=repaired_faces,
+                    name=output.name
+                )
+            except Exception as e:
+                logger.warning(f"Manifold repair failed: {e}")
+            
             elapsed = time.time() - start_time
             logger.info(f"Trimesh remesh: {mesh.num_faces} -> {output.num_faces} faces in {elapsed:.2f}s")
             

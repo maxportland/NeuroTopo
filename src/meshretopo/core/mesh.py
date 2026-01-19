@@ -171,12 +171,15 @@ class Mesh:
         path = Path(path)
         tm = trimesh.load(path, force='mesh')
         
-        return cls(
+        mesh = cls(
             vertices=np.asarray(tm.vertices),
             faces=np.asarray(tm.faces),
             name=path.stem,
             metadata={"source_file": str(path)}
         )
+        # Store source path for cache validation
+        mesh._source_path = str(path.resolve())
+        return mesh
     
     def to_file(self, path: Union[str, Path]) -> None:
         """Save mesh to file."""

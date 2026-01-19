@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Testing & Coverage
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.nox/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project-specific caches
+.cache/
+
+# Test results (timestamped run outputs)
+results/
+
+# Temporary render outputs
+renders/
+outputs/
+quick_start_output/
+
+# Development iteration outputs
+dev_iterations/
+
+# Experiment outputs
+experiments/
+
+# Benchmark results (regenerated)
+benchmark_results.json
+
+# Log files
+*.log
+
+# Temporary test files
+test_*.png
+blender_test_render.png
+
+# Blender temp files
+*.blend1
+*.blend2

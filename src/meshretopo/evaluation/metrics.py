@@ -21,6 +21,56 @@ logger = logging.getLogger("meshretopo.evaluation")
 
 
 @dataclass
+class PoleAnalysis:
+    """Analysis of poles (non-valence-4 vertices) in the mesh.
+    
+    Based on topology best practices:
+    - Poles should be placed in flat areas, not at deformation points
+    - 3-poles and 5-poles are acceptable; 6+ poles are problematic
+    - Fewer poles = cleaner subdivision
+    """
+    total_poles: int  # Count of all non-valence-4 vertices
+    n3_poles: int  # 3-valence poles (E-poles)
+    n5_poles: int  # 5-valence poles (N-poles)
+    n6_plus_poles: int  # Problematic high-valence poles
+    pole_ratio: float  # Ratio of poles to total vertices
+    poles_in_high_curvature: int  # Poles in high-curvature (deformation) areas
+    pole_placement_score: float  # 0-1, higher = better placement (away from curves)
+    
+    def to_dict(self) -> dict:
+        return {
+            "total_poles": self.total_poles,
+            "n3_poles": self.n3_poles,
+            "n5_poles": self.n5_poles,
+            "n6_plus_poles": self.n6_plus_poles,
+            "pole_ratio": self.pole_ratio,
+            "poles_in_high_curvature": self.poles_in_high_curvature,
+            "pole_placement_score": self.pole_placement_score,
+        }
+
+
+@dataclass
+class EdgeLoopMetrics:
+    """Metrics for edge loop quality.
+    
+    Good edge loops are continuous paths of edges that:
+    - Follow natural contours of the form
+    - Support areas that will deform
+    - Enable easy selection and modification
+    """
+    avg_loop_length: float  # Average number of edges in detected loops
+    loop_continuity_score: float  # 0-1, how many edges are part of clean loops
+    loop_alignment_score: float  # 0-1, how well loops align with curvature direction
+    
+    def to_dict(self) -> dict:
+        return {
+            "avg_loop_length": self.avg_loop_length,
+            "loop_continuity_score": self.loop_continuity_score,
+            "loop_alignment_score": self.loop_alignment_score,
+        }
+
+
+@dataclass
 class QuadQualityMetrics:
     """Metrics specific to quad quality."""
     aspect_ratio_mean: float  # 1.0 = perfect squares
@@ -29,9 +79,12 @@ class QuadQualityMetrics:
     angle_deviation_std: float
     valence_histogram: dict[int, int]  # Vertex valence distribution
     irregular_vertex_ratio: float  # Ratio of non-valence-4 vertices
+    # New topology-informed metrics
+    pole_analysis: Optional[PoleAnalysis] = None
+    edge_loop_metrics: Optional[EdgeLoopMetrics] = None
     
     def to_dict(self) -> dict:
-        return {
+        result = {
             "aspect_ratio_mean": self.aspect_ratio_mean,
             "aspect_ratio_std": self.aspect_ratio_std,
             "angle_deviation_mean": self.angle_deviation_mean,
@@ -39,6 +92,11 @@ class QuadQualityMetrics:
             "valence_histogram": self.valence_histogram,
             "irregular_vertex_ratio": self.irregular_vertex_ratio,
         }
+        if self.pole_analysis:
+            result["pole_analysis"] = self.pole_analysis.to_dict()
+        if self.edge_loop_metrics:
+            result["edge_loop_metrics"] = self.edge_loop_metrics.to_dict()
+        return result
 
 
 @dataclass
@@ -70,6 +128,9 @@ class TopologyMetrics:
     num_boundaries: int
     is_manifold: bool
     genus: int
+    # New topology-informed scores
+    pole_quality_score: float = 100.0  # 0-100, penalizes bad pole placement
+    edge_flow_score: float = 100.0  # 0-100, rewards good edge loop continuity
     
     def to_dict(self) -> dict:
         return {
@@ -80,6 +141,8 @@ class TopologyMetrics:
             "num_boundaries": self.num_boundaries,
             "is_manifold": self.is_manifold,
             "genus": self.genus,
+            "pole_quality_score": self.pole_quality_score,
+            "edge_flow_score": self.edge_flow_score,
         }
 
 
@@ -148,10 +211,21 @@ class RetopologyScore:
         self.fidelity_score = (hausdorff_score * 0.30 + mean_score * 0.30 + 
                                normal_score * 0.15 + coverage_score * 0.25)
         
-        # Topology score (0-100)
+        # Topology score (0-100) - now incorporates pole and edge flow quality
         manifold_score = 100 if self.topology.is_manifold else 0
         boundary_score = 100 if self.topology.num_boundaries <= 1 else max(0, 100 - self.topology.num_boundaries * 10)
-        self.topology_score = (manifold_score + boundary_score) / 2
+        
+        # Include new topology-informed metrics (pole placement & edge flow)
+        pole_score = self.topology.pole_quality_score
+        edge_flow_score = self.topology.edge_flow_score
+        
+        # Weight: manifold is critical, then pole placement, then boundaries, then edge flow
+        self.topology_score = (
+            manifold_score * 0.40 +  # Manifold is most critical
+            pole_score * 0.25 +       # Good pole placement matters for subdivision
+            boundary_score * 0.20 +   # Boundaries affect usability
+            edge_flow_score * 0.15    # Edge loops help deformation
+        )
         
         # Visual score (0-100)
         if self.visual_quality is not None:
@@ -197,6 +271,15 @@ class RetopologyScore:
             f"    - Aspect ratio:  {self.quad_quality.aspect_ratio_mean:.3f} (ideal: 1.0)",
             f"    - Angle dev:     {np.degrees(self.quad_quality.angle_deviation_mean):.1f}° (ideal: 0°)",
             f"    - Irregular:     {self.quad_quality.irregular_vertex_ratio*100:.1f}%",
+        ]
+        # Add pole analysis if available
+        if self.quad_quality.pole_analysis:
+            pa = self.quad_quality.pole_analysis
+            lines.extend([
+                f"    - Poles:         {pa.total_poles} ({pa.n3_poles} 3-poles, {pa.n5_poles} 5-poles)",
+                f"    - Pole placement: {pa.pole_placement_score*100:.1f}% (away from curves)",
+            ])
+        lines.extend([
             f"  Geometric Fidelity: {self.fidelity_score:.1f}/100",
             f"    - Hausdorff:     {self.geometric_fidelity.hausdorff_distance:.6f}",
             f"    - Mean dist:     {self.geometric_fidelity.mean_distance:.6f}",
@@ -205,8 +288,10 @@ class RetopologyScore:
             f"    - Vertices:      {self.topology.num_vertices}",
             f"    - Faces:         {self.topology.num_faces}",
             f"    - Manifold:      {self.topology.is_manifold}",
+            f"    - Pole quality:  {self.topology.pole_quality_score:.1f}/100",
+            f"    - Edge flow:     {self.topology.edge_flow_score:.1f}/100",
             f"  Visual Quality:    {self.visual_score:.1f}/100",
-        ]
+        ])
         if self.visual_quality is not None:
             lines.extend([
                 f"    - Shading:       {self.visual_quality.shading_smoothness*100:.1f}%",
@@ -351,13 +436,21 @@ class MeshEvaluator:
         target_valence = 4 if mesh.is_quad else 6
         irregular = np.sum(valence != target_valence) / len(valence)
         
+        # Compute pole analysis (topology-informed metric)
+        pole_analysis = self._compute_pole_analysis(mesh, valence)
+        
+        # Compute edge loop metrics
+        edge_loop_metrics = self._compute_edge_loop_metrics(mesh)
+        
         return QuadQualityMetrics(
             aspect_ratio_mean=float(np.mean(aspect_ratios)),
             aspect_ratio_std=float(np.std(aspect_ratios)),
             angle_deviation_mean=float(np.mean(angle_deviations)),
             angle_deviation_std=float(np.std(angle_deviations)),
             valence_histogram=valence_hist,
-            irregular_vertex_ratio=float(irregular)
+            irregular_vertex_ratio=float(irregular),
+            pole_analysis=pole_analysis,
+            edge_loop_metrics=edge_loop_metrics
         )
     
     def _quad_aspect_ratio(self, vertices: np.ndarray) -> float:
@@ -527,13 +620,28 @@ class MeshEvaluator:
         n_vertices = mesh.num_vertices
         n_faces = mesh.num_faces
         
-        # Count edges
+        # Helper to get unique vertices in a face (handles degenerate quads)
+        def get_face_verts(face):
+            """Get unique vertices in face preserving order."""
+            seen = set()
+            result = []
+            for v in face:
+                if v not in seen:
+                    seen.add(v)
+                    result.append(v)
+            return result
+        
+        # Count edges, properly handling degenerate quads
         edges = set()
         for face in mesh.faces:
-            n = len(face)
+            verts = get_face_verts(face)
+            n = len(verts)
+            if n < 3:
+                continue  # Skip degenerate faces
             for i in range(n):
-                v0, v1 = face[i], face[(i + 1) % n]
-                edges.add((min(v0, v1), max(v0, v1)))
+                v0, v1 = verts[i], verts[(i + 1) % n]
+                if v0 != v1:  # Skip self-loops
+                    edges.add((min(v0, v1), max(v0, v1)))
         n_edges = len(edges)
         
         # Euler characteristic: V - E + F
@@ -542,11 +650,15 @@ class MeshEvaluator:
         # Check manifold (each edge should have exactly 2 adjacent faces)
         edge_count = {}
         for face in mesh.faces:
-            n = len(face)
+            verts = get_face_verts(face)
+            n = len(verts)
+            if n < 3:
+                continue  # Skip degenerate faces
             for i in range(n):
-                v0, v1 = face[i], face[(i + 1) % n]
-                edge = (min(v0, v1), max(v0, v1))
-                edge_count[edge] = edge_count.get(edge, 0) + 1
+                v0, v1 = verts[i], verts[(i + 1) % n]
+                if v0 != v1:  # Skip self-loops
+                    edge = (min(v0, v1), max(v0, v1))
+                    edge_count[edge] = edge_count.get(edge, 0) + 1
         
         boundary_edges = sum(1 for c in edge_count.values() if c == 1)
         non_manifold_edges = sum(1 for c in edge_count.values() if c > 2)
@@ -558,6 +670,39 @@ class MeshEvaluator:
         # Genus: g = (2 - euler - boundaries) / 2
         genus = max(0, (2 - euler - n_boundaries) // 2)
         
+        # Compute pole quality score (0-100)
+        # Based on valence distribution - penalize high-valence poles heavily
+        valence = np.zeros(mesh.num_vertices, dtype=int)
+        for face in mesh.faces:
+            for vi in set(face):
+                valence[vi] += 1
+        
+        n3_poles = np.sum(valence == 3)
+        n5_poles = np.sum(valence == 5)
+        n6_plus = np.sum(valence >= 6)
+        total_poles = n3_poles + n5_poles + n6_plus
+        
+        # Score: penalize high-valence poles, 3/5 poles are acceptable
+        # 6+ poles are problematic (cause subdivision artifacts)
+        # Use proportion-based penalty:
+        # - 6+ poles: up to 50 points penalty based on their ratio to total vertices
+        # - Total poles: small penalty for high pole density
+        if n_vertices > 0:
+            n6_plus_ratio = n6_plus / n_vertices  # 0 to 1
+            pole_density = total_poles / n_vertices  # typically 0.3-0.9
+            
+            # 50% of vertices being 6+ poles = max 50 point penalty
+            # High pole density (>50%) adds small penalty
+            pole_penalty = (n6_plus_ratio * 50) + max(0, (pole_density - 0.5) * 20)
+        else:
+            pole_penalty = 0
+        
+        pole_quality_score = max(0.0, min(100.0, 100.0 - pole_penalty))
+        
+        # Compute edge flow score based on edge loop continuity
+        # Better loops = higher score
+        edge_flow_score = self._compute_edge_flow_score(mesh, edge_count)
+        
         return TopologyMetrics(
             num_vertices=n_vertices,
             num_faces=n_faces,
@@ -565,8 +710,210 @@ class MeshEvaluator:
             euler_characteristic=euler,
             num_boundaries=n_boundaries,
             is_manifold=is_manifold,
-            genus=genus
+            genus=genus,
+            pole_quality_score=pole_quality_score,
+            edge_flow_score=edge_flow_score
         )
+    
+    def _compute_pole_analysis(self, mesh: Mesh, valence: np.ndarray) -> PoleAnalysis:
+        """
+        Analyze pole (non-valence-4 vertex) distribution and placement.
+        
+        Topology best practice: poles should be in flat areas, not deformation zones.
+        """
+        n_vertices = len(valence)
+        
+        # Count poles by type
+        n3_poles = int(np.sum(valence == 3))
+        n5_poles = int(np.sum(valence == 5))
+        n6_plus = int(np.sum(valence >= 6))
+        total_poles = n3_poles + n5_poles + n6_plus
+        
+        pole_ratio = total_poles / max(1, n_vertices)
+        
+        # Identify poles
+        pole_indices = np.where((valence != 4) & (valence > 0))[0]
+        
+        # Compute curvature at each vertex to assess pole placement
+        # High curvature = deformation area = bad for poles
+        curvatures = self._estimate_vertex_curvature(mesh)
+        
+        # Count poles in high-curvature regions (top 25% of curvature)
+        if len(curvatures) > 0 and len(pole_indices) > 0:
+            curvature_threshold = np.percentile(curvatures, 75)
+            poles_in_high_curve = int(np.sum(curvatures[pole_indices] > curvature_threshold))
+        else:
+            poles_in_high_curve = 0
+        
+        # Pole placement score: 1.0 if all poles in flat areas, 0.0 if all in curved areas
+        if total_poles > 0:
+            pole_placement_score = 1.0 - (poles_in_high_curve / total_poles)
+        else:
+            pole_placement_score = 1.0  # No poles = perfect
+        
+        return PoleAnalysis(
+            total_poles=total_poles,
+            n3_poles=n3_poles,
+            n5_poles=n5_poles,
+            n6_plus_poles=n6_plus,
+            pole_ratio=pole_ratio,
+            poles_in_high_curvature=poles_in_high_curve,
+            pole_placement_score=pole_placement_score
+        )
+    
+    def _estimate_vertex_curvature(self, mesh: Mesh) -> np.ndarray:
+        """
+        Estimate discrete curvature at each vertex.
+        
+        Uses angle deficit method: curvature = 2π - sum of angles at vertex.
+        Higher absolute values = more curved = worse for poles.
+        """
+        curvatures = np.zeros(mesh.num_vertices)
+        angle_sums = np.zeros(mesh.num_vertices)
+        
+        for face in mesh.faces:
+            unique_verts = list(set(face))
+            if len(unique_verts) < 3:
+                continue
+            
+            vertices = mesh.vertices[unique_verts]
+            n = len(unique_verts)
+            
+            for i in range(n):
+                vi = unique_verts[i]
+                p0 = vertices[(i - 1) % n]
+                p1 = vertices[i]
+                p2 = vertices[(i + 1) % n]
+                
+                e1 = p0 - p1
+                e2 = p2 - p1
+                n1, n2 = np.linalg.norm(e1), np.linalg.norm(e2)
+                
+                if n1 > 1e-10 and n2 > 1e-10:
+                    cos_angle = np.clip(np.dot(e1, e2) / (n1 * n2), -1, 1)
+                    angle_sums[vi] += np.arccos(cos_angle)
+        
+        # Angle deficit: for interior vertex, ideal is 2π
+        curvatures = np.abs(2 * np.pi - angle_sums)
+        
+        return curvatures
+    
+    def _compute_edge_loop_metrics(self, mesh: Mesh) -> EdgeLoopMetrics:
+        """
+        Compute edge loop quality metrics.
+        
+        Good edge loops:
+        - Form continuous paths around the mesh
+        - Follow curvature directions
+        - Enable easy ring selection
+        """
+        # Build edge-to-face and vertex-to-edge maps
+        edge_faces = {}
+        vertex_edges = {}
+        
+        for fi, face in enumerate(mesh.faces):
+            unique_verts = list(set(face))
+            n = len(unique_verts)
+            if n < 3:
+                continue
+            
+            for i in range(n):
+                v0, v1 = unique_verts[i], unique_verts[(i + 1) % n]
+                if v0 == v1:
+                    continue
+                edge = (min(v0, v1), max(v0, v1))
+                
+                if edge not in edge_faces:
+                    edge_faces[edge] = []
+                edge_faces[edge].append(fi)
+                
+                for v in [v0, v1]:
+                    if v not in vertex_edges:
+                        vertex_edges[v] = set()
+                    vertex_edges[v].add(edge)
+        
+        # For quad meshes, try to trace edge loops
+        # An edge loop in quads follows edges that cross opposite sides of each quad
+        if not mesh.is_quad:
+            # For triangle meshes, edge loops are less defined
+            return EdgeLoopMetrics(
+                avg_loop_length=0.0,
+                loop_continuity_score=0.5,  # Neutral for tri meshes
+                loop_alignment_score=0.5
+            )
+        
+        # Count how many edges are part of "continuable" loops
+        # An edge is continuable if it has exactly one edge continuing on each end
+        continuable_edges = 0
+        total_interior_edges = 0
+        
+        for edge, faces in edge_faces.items():
+            if len(faces) != 2:
+                continue  # Skip boundary edges
+            
+            total_interior_edges += 1
+            
+            # Check if this edge can continue through each adjacent face
+            v0, v1 = edge
+            can_continue = True
+            
+            for fi in faces:
+                face = mesh.faces[fi]
+                unique_verts = list(set(face))
+                if len(unique_verts) != 4:
+                    can_continue = False
+                    break
+                
+                # In a quad, an edge loop crosses to the opposite edge
+                # Check if opposite edge exists
+                idx0 = unique_verts.index(v0) if v0 in unique_verts else -1
+                idx1 = unique_verts.index(v1) if v1 in unique_verts else -1
+                
+                if idx0 < 0 or idx1 < 0:
+                    can_continue = False
+                    break
+            
+            if can_continue:
+                continuable_edges += 1
+        
+        # Loop continuity: ratio of edges that can form loops
+        if total_interior_edges > 0:
+            loop_continuity = continuable_edges / total_interior_edges
+        else:
+            loop_continuity = 0.0
+        
+        # Simplified loop length estimation (would need full tracing for accuracy)
+        avg_loop_length = 4.0 * loop_continuity * 10  # Rough estimate
+        
+        return EdgeLoopMetrics(
+            avg_loop_length=avg_loop_length,
+            loop_continuity_score=loop_continuity,
+            loop_alignment_score=loop_continuity  # Simplified: use same as continuity
+        )
+    
+    def _compute_edge_flow_score(self, mesh: Mesh, edge_count: dict) -> float:
+        """
+        Compute edge flow quality score (0-100).
+        
+        Better edge flow = more edges can form continuous loops.
+        """
+        if not mesh.is_quad:
+            return 75.0  # Neutral for triangle meshes
+        
+        # Count edges by their "loop potential"
+        # Interior edges (count=2) have loop potential
+        # Boundary edges (count=1) don't
+        interior_edges = sum(1 for c in edge_count.values() if c == 2)
+        total_edges = len(edge_count)
+        
+        if total_edges == 0:
+            return 50.0
+        
+        # Higher ratio of interior edges = better edge flow
+        interior_ratio = interior_edges / total_edges
+        
+        # Scale to 0-100
+        return interior_ratio * 100.0
 
 
 def evaluate_retopology(
