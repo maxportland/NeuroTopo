@@ -37,6 +37,7 @@ for backend, target in [('trimesh', 5000), ('hybrid', 3500)]:
         'quad_score': score.quad_score,
         'fidelity': score.fidelity_score,
         'topology': score.topology_score,
+        'visual': score.visual_score,
         'ar': score.quad_quality.aspect_ratio_mean,
         'angle': score.quad_quality.angle_deviation_mean,
         'manifold': score.topology.is_manifold,
@@ -72,6 +73,7 @@ compare('overall', True)
 compare('quad_score', True)
 compare('fidelity', True)
 compare('topology', True)
+compare('visual', True)
 compare('ar', False)
 print(f"{'manifold':<25} {results['trimesh']['manifold']!s:<15} {results['hybrid']['manifold']!s:<15}")
 
@@ -83,3 +85,4 @@ print("  3. Fast decimation (fast_simplification)")
 print("  4. Laplacian triangle smoothing before quad conversion")
 print("  5. Quality-aware triangle pairing")
 print("  6. Fixed degenerate quad evaluation")
+print("  7. Visual quality evaluation (shading, edges, silhouette)")

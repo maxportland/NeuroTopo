@@ -15,6 +15,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from meshretopo.core.mesh import Mesh
+from meshretopo.evaluation.visual import VisualEvaluator, VisualQualityMetrics
 
 logger = logging.getLogger("meshretopo.evaluation")
 
@@ -88,18 +89,21 @@ class RetopologyScore:
     quad_quality: QuadQualityMetrics
     geometric_fidelity: GeometricFidelityMetrics
     topology: TopologyMetrics
+    visual_quality: Optional[VisualQualityMetrics] = None
     
     # Composite scores (0-100)
     overall_score: float = 0.0
     quad_score: float = 0.0
     fidelity_score: float = 0.0
     topology_score: float = 0.0
+    visual_score: float = 0.0
     
     # Weights used for scoring
     weights: dict = field(default_factory=lambda: {
-        "quad": 0.4,
-        "fidelity": 0.4,
-        "topology": 0.2
+        "quad": 0.30,
+        "fidelity": 0.30,
+        "topology": 0.15,
+        "visual": 0.25
     })
     
     def compute_scores(self, reference_diagonal: float = 1.0):
@@ -149,23 +153,41 @@ class RetopologyScore:
         boundary_score = 100 if self.topology.num_boundaries <= 1 else max(0, 100 - self.topology.num_boundaries * 10)
         self.topology_score = (manifold_score + boundary_score) / 2
         
+        # Visual score (0-100)
+        if self.visual_quality is not None:
+            # Weights for visual components
+            self.visual_score = (
+                self.visual_quality.shading_smoothness * 35 +
+                self.visual_quality.edge_visibility * 30 +
+                self.visual_quality.silhouette_quality * 20 +
+                self.visual_quality.render_consistency * 15
+            )
+        else:
+            # Default to neutral if no visual eval
+            self.visual_score = 50.0
+        
         # Overall weighted score
         self.overall_score = (
             self.weights["quad"] * self.quad_score +
             self.weights["fidelity"] * self.fidelity_score +
-            self.weights["topology"] * self.topology_score
+            self.weights["topology"] * self.topology_score +
+            self.weights["visual"] * self.visual_score
         )
     
     def to_dict(self) -> dict:
-        return {
+        result = {
             "overall_score": self.overall_score,
             "quad_score": self.quad_score,
             "fidelity_score": self.fidelity_score,
             "topology_score": self.topology_score,
+            "visual_score": self.visual_score,
             "quad_quality": self.quad_quality.to_dict(),
             "geometric_fidelity": self.geometric_fidelity.to_dict(),
             "topology": self.topology.to_dict(),
         }
+        if self.visual_quality is not None:
+            result["visual_quality"] = self.visual_quality.to_dict()
+        return result
     
     def summary(self) -> str:
         """Return human-readable summary."""
@@ -183,7 +205,14 @@ class RetopologyScore:
             f"    - Vertices:      {self.topology.num_vertices}",
             f"    - Faces:         {self.topology.num_faces}",
             f"    - Manifold:      {self.topology.is_manifold}",
+            f"  Visual Quality:    {self.visual_score:.1f}/100",
         ]
+        if self.visual_quality is not None:
+            lines.extend([
+                f"    - Shading:       {self.visual_quality.shading_smoothness*100:.1f}%",
+                f"    - Edge qual:     {self.visual_quality.edge_visibility*100:.1f}%",
+                f"    - Silhouette:    {self.visual_quality.silhouette_quality*100:.1f}%",
+            ])
         return "\n".join(lines)
 
 
@@ -194,8 +223,17 @@ class MeshEvaluator:
     Computes all metrics needed to assess retopology quality.
     """
     
-    def __init__(self, sample_count: int = 10000):
+    def __init__(self, sample_count: int = 10000, enable_visual: bool = True):
         self.sample_count = sample_count
+        self.enable_visual = enable_visual
+        self._visual_evaluator = None
+    
+    @property
+    def visual_evaluator(self) -> VisualEvaluator:
+        """Lazy-load visual evaluator."""
+        if self._visual_evaluator is None:
+            self._visual_evaluator = VisualEvaluator()
+        return self._visual_evaluator
     
     def evaluate(
         self,
@@ -240,11 +278,19 @@ class MeshEvaluator:
         topology = self._compute_topology(retopo_mesh)
         logger.debug(f"Topology computation: {time.time() - t0:.3f}s")
         
+        # Compute visual quality metrics
+        visual_quality = None
+        if self.enable_visual:
+            t0 = time.time()
+            visual_quality = self.visual_evaluator.evaluate(retopo_mesh, original_mesh)
+            logger.debug(f"Visual evaluation: {time.time() - t0:.3f}s")
+        
         # Create score and compute composites
         score = RetopologyScore(
             quad_quality=quad_quality,
             geometric_fidelity=geometric_fidelity,
-            topology=topology
+            topology=topology,
+            visual_quality=visual_quality,
         )
         score.compute_scores(reference_diagonal)
         
