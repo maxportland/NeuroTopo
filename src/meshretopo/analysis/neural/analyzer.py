@@ -138,11 +138,17 @@ class PrincipalDirectionPredictor(NeuralAnalyzer):
         )
     
     def _compute_principal_directions(self, mesh: Mesh) -> np.ndarray:
-        """Compute principal curvature directions via local covariance."""
+        """Compute principal curvature directions via local covariance (vectorized)."""
         if mesh.normals is None:
             mesh.compute_normals()
         
         n_verts = mesh.num_vertices
+        faces = np.array(mesh.faces)
+        
+        # For large meshes, use vectorized batch processing
+        if n_verts > 10000:
+            return self._compute_principal_directions_fast(mesh)
+        
         directions = np.zeros((n_verts, 3))
         
         # Build vertex adjacency
@@ -186,6 +192,98 @@ class PrincipalDirectionPredictor(NeuralAnalyzer):
                 directions[vi] = principal / norm
             else:
                 directions[vi] = self._arbitrary_tangent(normal)
+        
+        return directions
+    
+    def _compute_principal_directions_fast(self, mesh: Mesh) -> np.ndarray:
+        """Fast principal direction computation using sampling and interpolation."""
+        n_verts = mesh.num_vertices
+        normals = mesh.normals
+        verts = mesh.vertices
+        faces = np.array(mesh.faces)
+        
+        # For very large meshes, sample a subset and interpolate
+        sample_rate = max(1, n_verts // 20000)  # Aim for ~20k samples
+        
+        if sample_rate > 1:
+            # Sample vertices uniformly
+            sample_indices = np.arange(0, n_verts, sample_rate)
+            n_samples = len(sample_indices)
+        else:
+            sample_indices = np.arange(n_verts)
+            n_samples = n_verts
+        
+        # Build sparse adjacency for samples
+        from scipy import sparse
+        
+        rows = []
+        cols = []
+        for i in range(len(faces[0])):
+            for j in range(len(faces[0])):
+                if i != j:
+                    rows.extend(faces[:, i])
+                    cols.extend(faces[:, j])
+        
+        adj_matrix = sparse.csr_matrix(
+            (np.ones(len(rows)), (rows, cols)), 
+            shape=(n_verts, n_verts)
+        )
+        
+        # Compute directions only for sampled vertices
+        sample_directions = np.zeros((n_samples, 3))
+        
+        for idx, vi in enumerate(sample_indices):
+            neighbors = adj_matrix[vi].indices
+            if len(neighbors) < 3:
+                sample_directions[idx] = self._arbitrary_tangent(normals[vi])
+                continue
+            
+            center = verts[vi]
+            rel_positions = verts[neighbors] - center
+            normal = normals[vi]
+            dots = rel_positions @ normal
+            proj_positions = rel_positions - np.outer(dots, normal)
+            
+            cov = proj_positions.T @ proj_positions
+            
+            try:
+                eigenvalues, eigenvectors = np.linalg.eigh(cov)
+                principal = eigenvectors[:, -1]
+                principal = principal - np.dot(principal, normal) * normal
+                
+                norm = np.linalg.norm(principal)
+                if norm > 1e-10:
+                    sample_directions[idx] = principal / norm
+                else:
+                    sample_directions[idx] = self._arbitrary_tangent(normal)
+            except:
+                sample_directions[idx] = self._arbitrary_tangent(normal)
+        
+        # If we sampled, interpolate to all vertices
+        if sample_rate > 1:
+            directions = np.zeros((n_verts, 3))
+            
+            # Use nearest-neighbor from samples
+            from scipy.spatial import cKDTree
+            tree = cKDTree(verts[sample_indices])
+            
+            # Query in batches
+            batch_size = 10000
+            for start in range(0, n_verts, batch_size):
+                end = min(start + batch_size, n_verts)
+                _, nearest_idx = tree.query(verts[start:end], k=1)
+                directions[start:end] = sample_directions[nearest_idx]
+            
+            # Project to tangent plane and normalize
+            dots = np.sum(directions * normals, axis=1)
+            directions = directions - dots[:, np.newaxis] * normals
+            norms = np.linalg.norm(directions, axis=1, keepdims=True)
+            norms = np.maximum(norms, 1e-10)
+            directions = directions / norms
+            
+            return directions
+        else:
+            return sample_directions
         
         return directions
     

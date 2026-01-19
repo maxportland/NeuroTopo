@@ -6,6 +6,7 @@ Provides the high-level API for running the full retopology pipeline.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional, Union
 
@@ -14,6 +15,14 @@ from meshretopo.analysis import detect_features, create_default_analyzer
 from meshretopo.guidance import GuidanceComposer, GuidanceFields
 from meshretopo.remesh import get_remesher, RemeshResult
 from meshretopo.evaluation import evaluate_retopology, RetopologyScore
+from meshretopo.utils.timing import (
+    timed_operation, reset_timing_log, get_timing_log,
+    run_with_timeout,
+    TIMEOUT_CURVATURE, TIMEOUT_FEATURES, TIMEOUT_REMESH, TIMEOUT_EVALUATION,
+    TimeoutError,
+)
+
+logger = logging.getLogger("meshretopo.pipeline")
 
 
 class RetopoPipeline:
@@ -48,6 +57,13 @@ class RetopoPipeline:
         self.feature_weight = feature_weight
         self.preserve_boundary = preserve_boundary
         
+        # Timeout configuration (can be overridden per-instance)
+        self.timeout_analysis = TIMEOUT_CURVATURE
+        self.timeout_features = TIMEOUT_FEATURES
+        self.timeout_remesh = TIMEOUT_REMESH
+        self.timeout_evaluation = TIMEOUT_EVALUATION
+        self.enforce_timeouts = False  # Set True to kill long operations
+        
         # Create components
         self.analyzer = create_default_analyzer()
         self.composer = GuidanceComposer(
@@ -65,6 +81,8 @@ class RetopoPipeline:
         target_faces: Optional[int] = None,
         evaluate: bool = True,
         edge_flow_optimization: bool = False,
+        enable_timing: bool = True,
+        enforce_timeouts: Optional[bool] = None,
     ) -> tuple[Mesh, Optional[RetopologyScore]]:
         """
         Run full retopology pipeline.
@@ -74,29 +92,69 @@ class RetopoPipeline:
             target_faces: Override target face count
             evaluate: Whether to run evaluation
             edge_flow_optimization: Apply edge flow alignment post-processing
+            enable_timing: Log timing information
+            enforce_timeouts: Force timeout enforcement (overrides instance setting)
             
         Returns:
             Tuple of (output_mesh, score)
+            
+        Raises:
+            TimeoutError: If any stage exceeds its timeout (when enforce_timeouts=True)
         """
+        if enable_timing:
+            reset_timing_log()
+        
+        # Determine if we should enforce timeouts
+        do_enforce = enforce_timeouts if enforce_timeouts is not None else self.enforce_timeouts
+        
         # Load mesh if needed
         if isinstance(input_mesh, (str, Path)):
             mesh = Mesh.from_file(input_mesh)
         else:
             mesh = input_mesh
         
-        # Analysis
-        prediction = self.analyzer.predict(mesh)
-        features = detect_features(mesh)
+        logger.info(f"Processing mesh: {mesh.num_vertices} vertices, {mesh.num_faces} faces")
+        
+        # Analysis with timing and optional timeout enforcement
+        with timed_operation("analysis", log=enable_timing):
+            if do_enforce:
+                prediction = run_with_timeout(
+                    self.analyzer.predict, (mesh,),
+                    timeout=self.timeout_analysis,
+                    operation_name="analysis"
+                )
+            else:
+                prediction = self.analyzer.predict(mesh)
+        
+        # Feature detection with timing
+        with timed_operation("feature_detection", log=enable_timing):
+            if do_enforce:
+                features = run_with_timeout(
+                    detect_features, (mesh,),
+                    timeout=self.timeout_features,
+                    operation_name="feature_detection"
+                )
+            else:
+                features = detect_features(mesh)
         
         # Compose guidance
-        target = target_faces or self.target_faces
-        guidance = self.composer.compose(
-            mesh, prediction, features,
-            target_faces=target
-        )
+        with timed_operation("guidance_composition", log=enable_timing):
+            target = target_faces or self.target_faces
+            guidance = self.composer.compose(
+                mesh, prediction, features,
+                target_faces=target
+            )
         
-        # Remesh
-        result = self.remesher.remesh(mesh, guidance)
+        # Remesh with timing
+        with timed_operation("remeshing", log=enable_timing):
+            if do_enforce:
+                result = run_with_timeout(
+                    self.remesher.remesh, (mesh, guidance),
+                    timeout=self.timeout_remesh,
+                    operation_name="remeshing"
+                )
+            else:
+                result = self.remesher.remesh(mesh, guidance)
         
         if not result.success:
             raise RuntimeError(f"Remeshing failed: {result.metadata.get('error', 'unknown')}")
@@ -137,10 +195,23 @@ class RetopoPipeline:
             except Exception:
                 pass  # Skip if optimization fails
         
-        # Evaluate
+        # Evaluate with timing
         score = None
         if evaluate:
-            score = evaluate_retopology(output_mesh, mesh)
+            with timed_operation("evaluation", log=enable_timing):
+                if do_enforce:
+                    score = run_with_timeout(
+                        evaluate_retopology, (output_mesh, mesh),
+                        timeout=self.timeout_evaluation,
+                        operation_name="evaluation"
+                    )
+                else:
+                    score = evaluate_retopology(output_mesh, mesh)
+        
+        # Log timing summary
+        if enable_timing:
+            timing_log = get_timing_log()
+            logger.info(timing_log.summary())
         
         return output_mesh, score
     

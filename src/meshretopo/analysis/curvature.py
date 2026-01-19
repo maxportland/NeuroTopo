@@ -7,12 +7,16 @@ and feature detection.
 
 from __future__ import annotations
 
+import logging
+import time
 from enum import Enum
 from typing import Optional
 import numpy as np
 
 from meshretopo.core.mesh import Mesh
 from meshretopo.core.fields import ScalarField, FieldLocation
+
+logger = logging.getLogger("meshretopo.analysis.curvature")
 
 
 class CurvatureType(Enum):
@@ -29,12 +33,17 @@ class CurvatureAnalyzer:
     Compute various curvature measures on meshes.
     
     Used to determine where the mesh needs more or fewer quads.
+    Optimized for large meshes using vectorized operations.
     """
+    
+    # Use fast approximation for meshes larger than this
+    FAST_THRESHOLD = 50000
     
     def __init__(self, mesh: Mesh):
         self.mesh = mesh
         self._ensure_triangular()
         self._cache = {}
+        self._use_fast = mesh.num_faces > self.FAST_THRESHOLD
     
     def _ensure_triangular(self):
         """Ensure we're working with a triangular mesh."""
@@ -46,10 +55,13 @@ class CurvatureAnalyzer:
         if curvature_type in self._cache:
             return self._cache[curvature_type]
         
+        start_time = time.time()
+        method = "fast" if self._use_fast else "standard"
+        
         if curvature_type == CurvatureType.GAUSSIAN:
-            result = self._compute_gaussian()
+            result = self._compute_gaussian_fast() if self._use_fast else self._compute_gaussian()
         elif curvature_type == CurvatureType.MEAN:
-            result = self._compute_mean()
+            result = self._compute_mean_fast() if self._use_fast else self._compute_mean()
         elif curvature_type == CurvatureType.PRINCIPAL_MAX:
             result = self._compute_principal()[0]
         elif curvature_type == CurvatureType.PRINCIPAL_MIN:
@@ -59,8 +71,108 @@ class CurvatureAnalyzer:
         else:
             raise ValueError(f"Unknown curvature type: {curvature_type}")
         
+        elapsed = time.time() - start_time
+        logger.debug(f"Curvature {curvature_type.value} ({method}): {elapsed:.3f}s")
+        
         self._cache[curvature_type] = result
         return result
+    
+    def _compute_gaussian_fast(self) -> ScalarField:
+        """Fast vectorized Gaussian curvature computation."""
+        faces = np.array(self.mesh.faces)
+        verts = self.mesh.vertices
+        
+        # Get all triangle vertices at once
+        v0 = verts[faces[:, 0]]
+        v1 = verts[faces[:, 1]]
+        v2 = verts[faces[:, 2]]
+        
+        # Edge vectors
+        e0 = v1 - v0
+        e1 = v2 - v1
+        e2 = v0 - v2
+        
+        # Compute angles using dot products
+        def compute_angles(ea, eb):
+            dot = np.sum(-ea * eb, axis=1)
+            norm_a = np.linalg.norm(ea, axis=1)
+            norm_b = np.linalg.norm(eb, axis=1)
+            cos_angle = np.clip(dot / (norm_a * norm_b + 1e-10), -1, 1)
+            return np.arccos(cos_angle)
+        
+        angles0 = compute_angles(-e2, e0)
+        angles1 = compute_angles(-e0, e1)
+        angles2 = compute_angles(-e1, e2)
+        
+        # Triangle areas
+        cross = np.cross(e0, -e2)
+        tri_areas = 0.5 * np.linalg.norm(cross, axis=1)
+        
+        # Accumulate using np.add.at for speed
+        n_verts = len(verts)
+        angle_sum = np.zeros(n_verts)
+        area = np.zeros(n_verts)
+        
+        np.add.at(angle_sum, faces[:, 0], angles0)
+        np.add.at(angle_sum, faces[:, 1], angles1)
+        np.add.at(angle_sum, faces[:, 2], angles2)
+        
+        area_per_vert = tri_areas / 3
+        np.add.at(area, faces[:, 0], area_per_vert)
+        np.add.at(area, faces[:, 1], area_per_vert)
+        np.add.at(area, faces[:, 2], area_per_vert)
+        
+        # Gaussian curvature
+        area = np.maximum(area, 1e-10)
+        gaussian = (2 * np.pi - angle_sum) / area
+        
+        return ScalarField(gaussian, FieldLocation.VERTEX, "gaussian_curvature")
+    
+    def _compute_mean_fast(self) -> ScalarField:
+        """Fast vectorized mean curvature computation."""
+        faces = np.array(self.mesh.faces)
+        verts = self.mesh.vertices
+        n_verts = len(verts)
+        
+        # Get all triangle vertices
+        v0 = verts[faces[:, 0]]
+        v1 = verts[faces[:, 1]]
+        v2 = verts[faces[:, 2]]
+        
+        # Compute cotangent weights for each edge
+        def cotangent(v1, v2):
+            dot = np.sum(v1 * v2, axis=1)
+            cross_norm = np.linalg.norm(np.cross(v1, v2), axis=1)
+            return dot / (cross_norm + 1e-10)
+        
+        cot0 = cotangent(v1 - v0, v2 - v0)
+        cot1 = cotangent(v0 - v1, v2 - v1)
+        cot2 = cotangent(v0 - v2, v1 - v2)
+        
+        # Laplacian contributions
+        laplacian = np.zeros((n_verts, 3))
+        weights_sum = np.zeros(n_verts)
+        
+        # Contribution to v0
+        contrib0 = cot2[:, np.newaxis] * (v1 - v0) + cot1[:, np.newaxis] * (v2 - v0)
+        # Contribution to v1
+        contrib1 = cot2[:, np.newaxis] * (v0 - v1) + cot0[:, np.newaxis] * (v2 - v1)
+        # Contribution to v2
+        contrib2 = cot1[:, np.newaxis] * (v0 - v2) + cot0[:, np.newaxis] * (v1 - v2)
+        
+        np.add.at(laplacian, faces[:, 0], contrib0)
+        np.add.at(laplacian, faces[:, 1], contrib1)
+        np.add.at(laplacian, faces[:, 2], contrib2)
+        
+        np.add.at(weights_sum, faces[:, 0], cot1 + cot2)
+        np.add.at(weights_sum, faces[:, 1], cot0 + cot2)
+        np.add.at(weights_sum, faces[:, 2], cot0 + cot1)
+        
+        # Mean curvature
+        weights_sum = np.maximum(weights_sum, 1e-10)
+        mean_curvature = 0.5 * np.linalg.norm(laplacian, axis=1) / weights_sum
+        
+        return ScalarField(mean_curvature, FieldLocation.VERTEX, "mean_curvature")
     
     def _compute_gaussian(self) -> ScalarField:
         """

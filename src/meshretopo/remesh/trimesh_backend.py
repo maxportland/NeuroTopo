@@ -6,6 +6,7 @@ A fallback remesher that uses trimesh when PyMeshLab is not available.
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional
 import numpy as np
@@ -13,6 +14,8 @@ import numpy as np
 from meshretopo.core.mesh import Mesh
 from meshretopo.guidance.composer import GuidanceFields
 from meshretopo.remesh.base import Remesher, RemeshResult
+
+logger = logging.getLogger("meshretopo.remesh.trimesh")
 
 
 class TrimeshRemesher(Remesher):
@@ -86,6 +89,7 @@ class TrimeshRemesher(Remesher):
             )
             
             elapsed = time.time() - start_time
+            logger.info(f"Trimesh remesh: {mesh.num_faces} -> {output.num_faces} faces in {elapsed:.2f}s")
             
             return RemeshResult(
                 mesh=output,

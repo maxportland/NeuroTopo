@@ -6,6 +6,7 @@ Provides commands for processing, evaluation, and experimentation.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 import typer
@@ -27,19 +28,31 @@ def process(
     target_faces: Optional[int] = typer.Option(None, "-t", "--target-faces", help="Target face count"),
     backend: str = typer.Option("trimesh", "-b", "--backend", help="Remeshing backend"),
     evaluate: bool = typer.Option(True, "--evaluate/--no-evaluate", help="Run quality evaluation"),
+    timing: bool = typer.Option(False, "--timing", help="Show detailed timing information"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Enable verbose logging"),
+    timeout: Optional[float] = typer.Option(None, "--timeout", help="Timeout in seconds (enforces hard limit)"),
 ):
     """
     Process a mesh through the retopology pipeline.
     """
     from meshretopo.pipeline import RetopoPipeline
     from meshretopo.core.mesh import Mesh
+    from meshretopo.utils.timing import get_timing_log, configure_timeouts
+    
+    # Configure logging if verbose
+    if verbose or timing:
+        logging.basicConfig(
+            level=logging.INFO if not verbose else logging.DEBUG,
+            format='%(name)s - %(message)s'
+        )
     
     console.print(f"[bold blue]Loading mesh:[/bold blue] {input_path}")
     
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        console=console
+        console=console,
+        disable=verbose or timing,  # Disable spinner when logging
     ) as progress:
         task = progress.add_task("Processing...", total=None)
         
@@ -48,7 +61,34 @@ def process(
             target_faces=target_faces
         )
         
-        output_mesh, score = pipeline.process(input_path, evaluate=evaluate)
+        # Configure timeout if specified
+        if timeout:
+            configure_timeouts(
+                curvature=timeout / 4,
+                features=timeout / 4,
+                remesh=timeout / 2,
+                evaluation=timeout / 4
+            )
+            pipeline.enforce_timeouts = True
+            pipeline.timeout_analysis = timeout / 4
+            pipeline.timeout_features = timeout / 4
+            pipeline.timeout_remesh = timeout / 2
+            pipeline.timeout_evaluation = timeout / 4
+        
+        output_mesh, score = pipeline.process(
+            input_path, 
+            evaluate=evaluate,
+            enable_timing=timing or verbose
+        )
+    
+    # Show timing if requested
+    if timing:
+        timing_log = get_timing_log()
+        console.print(f"\n[bold cyan]Timing Summary[/bold cyan]")
+        for entry in timing_log.entries:
+            status = "[green]OK[/green]" if entry.success else "[red]FAIL[/red]"
+            console.print(f"  {entry.operation}: {entry.elapsed_seconds:.3f}s {status}")
+        console.print(f"  [bold]Total: {timing_log.total_time():.3f}s[/bold]")
     
     # Show results
     if score:

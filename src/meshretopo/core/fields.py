@@ -64,22 +64,59 @@ class ScalarField:
         return ScalarField(clamped, self.location, f"{self.name}_clamped")
     
     def smooth(self, mesh: Mesh, iterations: int = 1, factor: float = 0.5) -> ScalarField:
-        """Laplacian smoothing of scalar field."""
+        """Laplacian smoothing of scalar field (vectorized)."""
         if self.location != FieldLocation.VERTEX:
             raise ValueError("Smoothing only supported for vertex fields")
         
         values = self.values.copy()
+        n_verts = mesh.num_vertices
+        faces = np.array(mesh.faces)
         
-        # Build adjacency
-        adjacency = [[] for _ in range(mesh.num_vertices)]
+        # Build sparse adjacency using scipy for large meshes
+        if n_verts > 10000:
+            try:
+                from scipy import sparse
+                
+                # Build sparse adjacency matrix
+                rows = []
+                cols = []
+                for i in range(len(faces[0])):
+                    for j in range(len(faces[0])):
+                        if i != j:
+                            rows.extend(faces[:, i])
+                            cols.extend(faces[:, j])
+                
+                data = np.ones(len(rows))
+                adj_matrix = sparse.csr_matrix(
+                    (data, (rows, cols)), 
+                    shape=(n_verts, n_verts)
+                )
+                # Make binary (some edges may be duplicated)
+                adj_matrix.data[:] = 1
+                
+                # Compute degree matrix
+                degree = np.array(adj_matrix.sum(axis=1)).flatten()
+                degree = np.maximum(degree, 1)
+                
+                # Smooth using matrix operations
+                for _ in range(iterations):
+                    neighbor_sum = adj_matrix.dot(values)
+                    neighbor_avg = neighbor_sum / degree
+                    values = values * (1 - factor) + neighbor_avg * factor
+                
+                return ScalarField(values, self.location, f"{self.name}_smoothed")
+            except ImportError:
+                pass  # Fall back to basic method
+        
+        # Basic method for small meshes
+        adjacency = [set() for _ in range(n_verts)]
         for face in mesh.faces:
             for i, vi in enumerate(face):
                 for j, vj in enumerate(face):
                     if i != j:
-                        adjacency[vi].append(vj)
+                        adjacency[vi].add(vj)
         
-        # Remove duplicates
-        adjacency = [list(set(adj)) for adj in adjacency]
+        adjacency = [list(adj) for adj in adjacency]
         
         # Smooth
         for _ in range(iterations):

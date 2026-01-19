@@ -7,12 +7,16 @@ enabling data-driven iteration and improvement.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
 from scipy.spatial import cKDTree
 
 from meshretopo.core.mesh import Mesh
+
+logger = logging.getLogger("meshretopo.evaluation")
 
 
 @dataclass
@@ -208,13 +212,19 @@ class MeshEvaluator:
         Returns:
             RetopologyScore with all metrics
         """
+        start_time = time.time()
+        
         # Compute quad quality
+        t0 = time.time()
         quad_quality = self._compute_quad_quality(retopo_mesh)
+        logger.debug(f"Quad quality computation: {time.time() - t0:.3f}s")
         
         # Compute geometric fidelity (if original provided)
+        t0 = time.time()
         if original_mesh is not None:
             geometric_fidelity = self._compute_fidelity(retopo_mesh, original_mesh)
             reference_diagonal = original_mesh.diagonal
+            logger.debug(f"Fidelity computation: {time.time() - t0:.3f}s")
         else:
             geometric_fidelity = GeometricFidelityMetrics(
                 hausdorff_distance=0,
@@ -226,7 +236,9 @@ class MeshEvaluator:
             reference_diagonal = retopo_mesh.diagonal
         
         # Compute topology metrics
+        t0 = time.time()
         topology = self._compute_topology(retopo_mesh)
+        logger.debug(f"Topology computation: {time.time() - t0:.3f}s")
         
         # Create score and compute composites
         score = RetopologyScore(
@@ -235,6 +247,9 @@ class MeshEvaluator:
             topology=topology
         )
         score.compute_scores(reference_diagonal)
+        
+        total_time = time.time() - start_time
+        logger.info(f"Evaluation complete in {total_time:.2f}s, score: {score.overall_score:.1f}")
         
         return score
     

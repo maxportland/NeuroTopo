@@ -18,9 +18,19 @@
 
 ### Real-World Meshes
 
-| Mesh | Input Faces | Output Faces | Score | Notes |
-|------|-------------|--------------|-------|-------|
-| test_mesh.fbx | TBD | TBD | TBD | High-poly test |
+| Mesh | Input Faces | Output Faces | Reduction | Score | Time |
+|------|-------------|--------------|-----------|-------|------|
+| test_mesh.fbx | 256,108 | 2,876 | 1% | 47.5 | **7.4s** |
+
+**Performance Improvements (v0.3.1):**
+- Vectorized curvature computation: 180s → 0.05s
+- Vectorized feature detection: 170s → 0.64s
+- Total pipeline speedup: **25.7x** (189s → 7.4s)
+
+**Quality Observations:**
+- Real mesh scores ~10 points lower than procedural meshes
+- Fidelity remains good (66-67) but quad quality is ~27
+- Output is triangular - quad conversion needed for higher scores
 
 ---
 

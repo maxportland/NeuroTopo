@@ -8,6 +8,7 @@ the best configuration for a given mesh.
 from __future__ import annotations
 
 import time
+import logging
 from dataclasses import dataclass
 from typing import Optional, Callable
 import numpy as np
@@ -15,6 +16,12 @@ import numpy as np
 from meshretopo.core.mesh import Mesh
 from meshretopo.pipeline import RetopoPipeline
 from meshretopo.evaluation import RetopologyScore
+from meshretopo.utils.timing import (
+    timed_operation, get_timing_log, run_with_timeout,
+    TIMEOUT_AUTOTUNER_ITERATION, TimeoutError,
+)
+
+logger = logging.getLogger("meshretopo.tuning")
 
 
 @dataclass
@@ -52,12 +59,15 @@ class AutoTuner:
         self.max_iterations = max_iterations
         self.early_stop_score = early_stop_score
         self.time_limit = time_limit
+        self.iteration_timeout = TIMEOUT_AUTOTUNER_ITERATION
+        self.enforce_iteration_timeouts = False  # Set True to kill slow iterations
     
     def tune(
         self,
         mesh: Mesh,
         objective: str = "overall",  # overall, quad, fidelity
         verbose: bool = True,
+        enforce_timeouts: bool = None,
     ) -> TuningResult:
         """
         Find optimal parameters for the given mesh.
@@ -66,6 +76,7 @@ class AutoTuner:
             mesh: Input mesh to optimize for
             objective: Which score to optimize
             verbose: Print progress
+            enforce_timeouts: Force timeout enforcement per iteration
             
         Returns:
             TuningResult with best configuration
@@ -74,6 +85,8 @@ class AutoTuner:
         results = []
         best_score = 0
         best_config = None
+        
+        do_enforce = enforce_timeouts if enforce_timeouts is not None else self.enforce_iteration_timeouts
         
         # Phase 1: Grid search over key parameters
         if verbose:
@@ -87,7 +100,7 @@ class AutoTuner:
                     print(f"  Time limit reached after {i} iterations")
                 break
             
-            score = self._evaluate_config(mesh, config, objective)
+            score = self._evaluate_config(mesh, config, objective, enforce_timeout=do_enforce)
             results.append((config, score))
             
             if score > best_score:
@@ -113,7 +126,7 @@ class AutoTuner:
                 if time.time() - start_time > self.time_limit:
                     break
                 
-                score = self._evaluate_config(mesh, config, objective)
+                score = self._evaluate_config(mesh, config, objective, enforce_timeout=do_enforce)
                 results.append((config, score))
                 
                 if score > best_score:
@@ -198,9 +211,26 @@ class AutoTuner:
         mesh: Mesh,
         config: dict,
         objective: str,
+        iteration_timeout: float = None,
+        enforce_timeout: bool = False,
     ) -> float:
-        """Evaluate a configuration and return score."""
-        try:
+        """
+        Evaluate a configuration and return score.
+        
+        Args:
+            mesh: Input mesh
+            config: Configuration to test
+            objective: Score objective (overall, quad, fidelity)
+            iteration_timeout: Timeout per iteration (default: TIMEOUT_AUTOTUNER_ITERATION)
+            enforce_timeout: If True, kill iterations that exceed timeout
+            
+        Returns:
+            Score value (0.0 if evaluation fails or times out)
+        """
+        timeout = iteration_timeout or TIMEOUT_AUTOTUNER_ITERATION
+        start_time = time.time()
+        
+        def do_evaluation():
             target_faces = int(mesh.num_faces * config["reduction"])
             
             pipeline = RetopoPipeline(
@@ -210,7 +240,25 @@ class AutoTuner:
                 feature_weight=config["feature_weight"],
             )
             
-            _, score = pipeline.process(mesh, evaluate=True)
+            # Disable timing in sub-pipeline to avoid noise
+            _, score = pipeline.process(mesh, evaluate=True, enable_timing=False)
+            return score
+        
+        try:
+            if enforce_timeout:
+                score = run_with_timeout(
+                    do_evaluation, 
+                    timeout=timeout,
+                    operation_name=f"evaluate_config({config['backend']})"
+                )
+            else:
+                score = do_evaluation()
+            
+            elapsed = time.time() - start_time
+            logger.debug(f"Config {config['backend']} evaluated in {elapsed:.2f}s")
+            
+            if elapsed > timeout:
+                logger.warning(f"Config {config['backend']} took {elapsed:.2f}s (limit: {timeout}s)")
             
             if score is None:
                 return 0.0
@@ -221,8 +269,12 @@ class AutoTuner:
                 return score.fidelity_score
             else:
                 return score.overall_score
-                
+        
+        except TimeoutError:
+            logger.warning(f"Config {config['backend']} timed out after {timeout}s")
+            return 0.0
         except Exception as e:
+            logger.debug(f"Config evaluation failed: {e}")
             return 0.0
 
 
