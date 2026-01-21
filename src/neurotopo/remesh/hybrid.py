@@ -709,6 +709,219 @@ print(f"Exported to {{r'{output_obj}'}}")
                 logging.getLogger(__name__).info(f"Removed {degen_count} degenerate faces from Blender output")
                 output_mesh = Mesh(output_mesh.vertices, good_faces)
             
+            # Apply neural network-guided pole cleanup in Python
+            output_mesh = self._neural_pole_cleanup(output_mesh)
+            
+            return output_mesh
+    
+    def _neural_pole_cleanup(self, mesh: Mesh, max_iterations: int = 5) -> Mesh:
+        """
+        Apply neural network-guided pole cleanup.
+        
+        Uses the trained model to identify which poles are defects vs structural,
+        then applies targeted fixes to defect poles via Blender.
+        """
+        try:
+            from neurotopo.analysis.neural.pole_classifier import HybridPoleClassifier
+            from pathlib import Path
+            import tempfile
+            import subprocess
+            
+            model_path = Path(__file__).parent.parent.parent.parent / "models" / "pole_classifier.pt"
+            if not model_path.exists():
+                logger.debug("Neural pole classifier model not found, skipping neural cleanup")
+                return mesh
+            
+            classifier = HybridPoleClassifier(model_path=str(model_path))
+            
+            initial_quality = self._assess_quad_quality(mesh)
+            logger.info(f"Neural pole cleanup: starting quality {initial_quality:.1%}")
+            
+            # Get fixable poles
+            fixable = classifier.get_fixable_poles(mesh, min_confidence=0.75)
+            
+            if not fixable:
+                logger.debug("No fixable poles found")
+                return mesh
+            
+            logger.info(f"Neural pole cleanup: {len(fixable)} poles identified for fixing")
+            
+            # Group by fix type
+            v3_poles = [p for p in fixable if p.valence == 3]
+            v5_poles = [p for p in fixable if p.valence == 5]
+            v6plus_poles = [p for p in fixable if p.valence >= 6]
+            
+            logger.info(f"  V3 defects: {len(v3_poles)}, V5 defects: {len(v5_poles)}, V6+ defects: {len(v6plus_poles)}")
+            
+            # Find V3-V5 pairs that are connected by an edge
+            v3_indices = set(p.vertex_idx for p in v3_poles)
+            v5_indices = set(p.vertex_idx for p in v5_poles)
+            
+            # Build edge adjacency from mesh faces
+            edge_pairs = []
+            for face in mesh.faces:
+                n = len(face)
+                for i in range(n):
+                    v0, v1 = face[i], face[(i + 1) % n]
+                    # Check if this edge connects a V3 defect to a V5 defect
+                    if (v0 in v3_indices and v1 in v5_indices) or (v0 in v5_indices and v1 in v3_indices):
+                        edge_pairs.append((min(v0, v1), max(v0, v1)))
+            
+            edge_pairs = list(set(edge_pairs))  # Deduplicate
+            
+            if not edge_pairs:
+                logger.info("No V3-V5 edge pairs found for targeted cleanup")
+                return mesh
+            
+            logger.info(f"Found {len(edge_pairs)} V3-V5 edge pairs to collapse")
+            
+            # Convert numpy types to Python ints for Blender script
+            edge_pairs_clean = [(int(v0), int(v1)) for v0, v1 in edge_pairs[:100]]
+            
+            # Use Blender to collapse the identified edges - iterate until no improvement
+            prev_quality = initial_quality
+            for iteration in range(max_iterations):
+                mesh = self._blender_collapse_edges(mesh, edge_pairs_clean)
+                
+                # Re-analyze
+                fixable = classifier.get_fixable_poles(mesh, min_confidence=0.75)
+                v3_indices = set(p.vertex_idx for p in fixable if p.valence == 3)
+                v5_indices = set(p.vertex_idx for p in fixable if p.valence == 5)
+                
+                # Find new edge pairs
+                edge_pairs = []
+                for face in mesh.faces:
+                    n = len(face)
+                    for i in range(n):
+                        v0, v1 = face[i], face[(i + 1) % n]
+                        if (v0 in v3_indices and v1 in v5_indices) or (v0 in v5_indices and v1 in v3_indices):
+                            edge_pairs.append((min(v0, v1), max(v0, v1)))
+                
+                edge_pairs = list(set(edge_pairs))
+                edge_pairs_clean = [(int(v0), int(v1)) for v0, v1 in edge_pairs[:100]]
+                
+                curr_quality = self._assess_quad_quality(mesh)
+                logger.info(f"  Iteration {iteration + 1}: quality {curr_quality:.1%}, {len(fixable)} poles to fix")
+                
+                if curr_quality <= prev_quality or len(edge_pairs_clean) == 0:
+                    break
+                prev_quality = curr_quality
+            
+            final_quality = self._assess_quad_quality(mesh)
+            logger.info(f"Neural pole cleanup: final quality {final_quality:.1%}")
+            
+            return mesh
+            
+        except Exception as e:
+            logger.warning(f"Neural pole cleanup failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return mesh
+    
+    def _blender_collapse_edges(self, mesh: Mesh, edge_pairs: list) -> Mesh:
+        """Use Blender to collapse specific edges identified by the neural network."""
+        import tempfile
+        import subprocess
+        from pathlib import Path
+        
+        blender_path = "/Applications/Blender.app/Contents/MacOS/blender"
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            input_obj = tmpdir / "input.obj"
+            output_obj = tmpdir / "output.obj"
+            
+            mesh.to_file(input_obj)
+            
+            # Convert edge pairs to a Python list string for the script
+            edges_str = str(edge_pairs)
+            
+            script = f'''
+import bpy
+import bmesh
+
+# Clear and import
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.wm.obj_import(filepath=r"{input_obj}")
+
+obj = bpy.context.selected_objects[0]
+bpy.context.view_layer.objects.active = obj
+
+# Edge pairs to collapse (V3-V5 pairs identified by neural network)
+edge_pairs = {edges_str}
+print(f"Collapsing {{len(edge_pairs)}} V3-V5 edge pairs")
+
+bpy.ops.object.mode_set(mode='EDIT')
+bm = bmesh.from_edit_mesh(obj.data)
+bm.verts.ensure_lookup_table()
+bm.edges.ensure_lookup_table()
+
+# Build a lookup of edges by vertex pairs
+edge_map = {{}}
+for e in bm.edges:
+    key = (min(e.verts[0].index, e.verts[1].index), max(e.verts[0].index, e.verts[1].index))
+    edge_map[key] = e
+
+collapsed = 0
+for v0, v1 in edge_pairs:
+    key = (v0, v1)
+    if key in edge_map:
+        e = edge_map[key]
+        if e.is_valid and not any(v.is_boundary for v in e.verts):
+            try:
+                bmesh.ops.collapse(bm, edges=[e])
+                collapsed += 1
+            except:
+                pass
+
+print(f"Collapsed {{collapsed}} edges")
+bmesh.update_edit_mesh(obj.data)
+
+# Clean up
+bpy.ops.mesh.select_all(action='SELECT')
+bpy.ops.mesh.remove_doubles(threshold=0.0001)
+bpy.ops.mesh.dissolve_degenerate(threshold=0.0001)
+
+# Convert any remaining triangles to quads
+bm = bmesh.from_edit_mesh(obj.data)
+tris = sum(1 for f in bm.faces if len(f.verts) == 3)
+if tris > 0:
+    bpy.ops.mesh.tris_convert_to_quads(
+        face_threshold=0.8,
+        shape_threshold=0.8,
+    )
+
+bpy.ops.object.mode_set(mode='OBJECT')
+
+# Export
+bpy.ops.wm.obj_export(
+    filepath=r"{output_obj}",
+    export_selected_objects=True,
+    export_triangulated_mesh=False,
+    export_materials=False,
+    export_normals=True,
+    export_uv=True
+)
+
+final_quads = sum(1 for p in obj.data.polygons if len(p.vertices) == 4)
+final_faces = len(obj.data.polygons)
+print(f"Final: {{final_faces}} faces, {{final_quads}} quads ({{100*final_quads/max(1,final_faces):.1f}}%)")
+'''
+            script_path = tmpdir / "collapse_edges.py"
+            script_path.write_text(script)
+            
+            result = subprocess.run(
+                [blender_path, "--background", "--python", str(script_path)],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if not output_obj.exists():
+                logger.warning(f"Blender edge collapse failed: {result.stderr}")
+                return mesh
+            
+            output_mesh = Mesh.from_file(output_obj)
             return output_mesh
     
     def _blender_curvature_decimate(

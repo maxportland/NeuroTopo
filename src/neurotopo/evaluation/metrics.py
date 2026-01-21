@@ -305,6 +305,10 @@ class TopologyMetrics:
     # New topology-informed scores
     pole_quality_score: float = 100.0  # 0-100, penalizes bad pole placement
     edge_flow_score: float = 100.0  # 0-100, rewards good edge loop continuity
+    # Detailed manifold info
+    num_non_manifold_vertices: int = 0
+    num_non_manifold_edges: int = 0
+    num_boundary_edges: int = 0
     
     def to_dict(self) -> dict:
         return {
@@ -317,6 +321,9 @@ class TopologyMetrics:
             "genus": self.genus,
             "pole_quality_score": self.pole_quality_score,
             "edge_flow_score": self.edge_flow_score,
+            "num_non_manifold_vertices": self.num_non_manifold_vertices,
+            "num_non_manifold_edges": self.num_non_manifold_edges,
+            "num_boundary_edges": self.num_boundary_edges,
         }
 
 
@@ -461,7 +468,7 @@ class RetopologyScore:
             f"  Topology:          {self.topology_score:.1f}/100",
             f"    - Vertices:      {self.topology.num_vertices}",
             f"    - Faces:         {self.topology.num_faces}",
-            f"    - Manifold:      {self.topology.is_manifold}",
+            f"    - Manifold:      {'✓' if self.topology.is_manifold else '✗'} ({self.topology.num_non_manifold_vertices} non-manifold verts, {self.topology.num_boundary_edges} boundary edges)",
             f"    - Pole quality:  {self.topology.pole_quality_score:.1f}/100",
             f"    - Edge flow:     {self.topology.edge_flow_score:.1f}/100",
             f"  Visual Quality:    {self.visual_score:.1f}/100",
@@ -632,11 +639,23 @@ class MeshEvaluator:
         # Euler characteristic
         euler = cache.num_vertices - cache.num_edges + cache.num_faces
         
-        # Manifold check
-        is_manifold = cache.non_manifold_edges == 0
+        # Use comprehensive Blender manifold test if available
+        try:
+            from neurotopo.evaluation.manifold_test import test_manifold
+            manifold_result = test_manifold(mesh, use_blender=True)
+            is_manifold = manifold_result.is_manifold
+            num_non_manifold_verts = manifold_result.num_non_manifold_vertices
+            num_non_manifold_edges = manifold_result.num_non_manifold_edges
+            num_boundary_edges = manifold_result.num_boundary_edges
+        except Exception:
+            # Fall back to simple edge-based check
+            is_manifold = cache.non_manifold_edges == 0
+            num_non_manifold_verts = 0
+            num_non_manifold_edges = cache.non_manifold_edges
+            num_boundary_edges = cache.boundary_edges
         
         # Boundaries
-        n_boundaries = 1 if cache.boundary_edges > 0 else 0
+        n_boundaries = 1 if num_boundary_edges > 0 else 0
         
         # Genus
         genus = max(0, (2 - euler - n_boundaries) // 2)
@@ -669,6 +688,9 @@ class MeshEvaluator:
             genus=genus,
             pole_quality_score=pole_quality_score,
             edge_flow_score=edge_flow_score,
+            num_non_manifold_vertices=num_non_manifold_verts,
+            num_non_manifold_edges=num_non_manifold_edges,
+            num_boundary_edges=num_boundary_edges,
         )
     
     def _compute_pole_analysis_cached(self, mesh: Mesh) -> PoleAnalysis:

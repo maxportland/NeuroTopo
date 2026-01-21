@@ -24,6 +24,12 @@ from neurotopo.evaluation.ai_quality import (
     IssueCategory,
     assess_mesh_quality,
 )
+from neurotopo.evaluation.manifold_test import (
+    test_manifold,
+    test_manifold_blender,
+    test_manifold_python,
+    ManifoldTestResult,
+)
 
 __all__ = [
     "MeshEvaluator",
@@ -43,4 +49,9 @@ __all__ = [
     "IssueSeverity",
     "IssueCategory",
     "assess_mesh_quality",
+    # Manifold testing
+    "test_manifold",
+    "test_manifold_blender",
+    "test_manifold_python",
+    "ManifoldTestResult",
 ]

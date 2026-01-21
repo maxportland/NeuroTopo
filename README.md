@@ -297,6 +297,38 @@ regions = segmenter.analyze(mesh_path='character.obj')
 - **Topology**: Manifold check, boundary count, genus
 - **AI Assessment**: Visual quality score with specific issue detection
 
+### Manifold Testing (NEW in v0.5)
+
+Comprehensive manifold validation using Blender's geometry analysis:
+
+```python
+from neurotopo.evaluation import test_manifold
+from neurotopo.core.mesh import Mesh
+
+mesh = Mesh.from_file('output.obj')
+result = test_manifold(mesh, use_blender=True)
+
+print(result.summary())
+# Manifold Test: ✓ MANIFOLD
+#   Non-manifold vertices: 0
+#   Non-manifold edges: 0
+#   Boundary edges: 0
+#   Wire edges: 0
+
+# Detailed information
+print(f"Is manifold: {result.is_manifold}")
+print(f"Non-manifold vertices: {result.non_manifold_vertices[:10]}")
+print(f"Boundary edges: {result.num_boundary_edges}")
+```
+
+**Detected Issues:**
+- Non-manifold vertices (pinch points, bowtie vertices)
+- Non-manifold edges (shared by >2 faces)
+- Boundary edges (open mesh borders)
+- Wire edges (edges not connected to faces)
+
+The manifold test is automatically integrated into the topology metrics evaluation.
+
 ## Configuration
 
 ### API Key Setup (macOS)
