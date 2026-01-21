@@ -24,6 +24,16 @@
         "target_faces": 5000,
         "backend": "hybrid"
       }
+    },
+    {
+      "name": "test_mesh2",
+      "path": "test_mesh2.fbx",
+      "description": "FBX mesh for testing",
+      "expected_regions": [],
+      "retopology": {
+        "target_faces": 5000,
+        "backend": "hybrid"
+      }
     }
   ],
   
@@ -51,6 +61,13 @@
     "retopology": {
       "description": "Retopology pipeline test",
       "meshes": ["test_mesh"],
+      "tests": ["retopology", "quality_evaluation"],
+      "settings": {}
+    },
+    
+    "retopology2": {
+      "description": "Retopology pipeline test for mesh2",
+      "meshes": ["test_mesh2"],
       "tests": ["retopology", "quality_evaluation"],
       "settings": {}
     },

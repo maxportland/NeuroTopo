@@ -46,6 +46,9 @@ def process(
             format='%(name)s - %(message)s'
         )
     
+    # Suppress trimesh's verbose timing logs (on_surface, etc.)
+    logging.getLogger("trimesh").setLevel(logging.WARNING)
+    
     console.print(f"[bold blue]Loading mesh:[/bold blue] {input_path}")
     
     with Progress(

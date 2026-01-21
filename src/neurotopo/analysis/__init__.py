@@ -4,6 +4,7 @@ from neurotopo.analysis.curvature import (
     CurvatureAnalyzer,
     CurvatureType,
     compute_curvature,
+    compute_principal_directions,
 )
 from neurotopo.analysis.features import (
     FeatureDetector,
@@ -30,6 +31,7 @@ __all__ = [
     "CurvatureAnalyzer",
     "CurvatureType", 
     "compute_curvature",
+    "compute_principal_directions",
     "FeatureDetector",
     "FeatureSet",
     "FeatureEdge",

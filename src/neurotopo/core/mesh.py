@@ -165,21 +165,147 @@ class Mesh:
     
     @classmethod
     def from_file(cls, path: Union[str, Path]) -> Mesh:
-        """Load mesh from file (OBJ, PLY, STL, etc.)."""
-        import trimesh
+        """Load mesh from file (OBJ, PLY, STL, FBX, etc.).
         
+        For OBJ files: Uses quad-aware loader to preserve quad topology.
+        For FBX files: Converts via Blender to OBJ, then uses quad-aware loader.
+        For other files: Uses trimesh (which triangulates).
+        """
         path = Path(path)
-        tm = trimesh.load(path, force='mesh')
+        
+        # Handle FBX files through Blender conversion
+        if path.suffix.lower() == '.fbx':
+            return cls._load_fbx_via_blender_quad_aware(path)
+        elif path.suffix.lower() == '.obj':
+            # Use quad-aware OBJ loader to preserve quads
+            return cls._load_obj_quad_aware(path)
+        else:
+            # Fall back to trimesh for other formats (triangulates)
+            import trimesh
+            tm = trimesh.load(path, force='mesh')
+            mesh = cls(
+                vertices=np.asarray(tm.vertices),
+                faces=np.asarray(tm.faces),
+                name=path.stem,
+                metadata={"source_file": str(path)}
+            )
+            mesh._source_path = str(path.resolve())
+            return mesh
+    
+    @classmethod
+    def _load_obj_quad_aware(cls, path: Path) -> Mesh:
+        """Load OBJ file preserving quads (not triangulating).
+        
+        Supports mixed tri/quad meshes by padding triangles to quads 
+        (last vertex repeated) or storing as pure quads/tris.
+        """
+        vertices = []
+        faces = []
+        max_face_verts = 0
+        
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                parts = line.split()
+                if not parts:
+                    continue
+                
+                if parts[0] == 'v' and len(parts) >= 4:
+                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                elif parts[0] == 'f':
+                    # Parse face indices (OBJ is 1-indexed, may have v/vt/vn format)
+                    face_verts = []
+                    for p in parts[1:]:
+                        # Handle v/vt/vn format - extract just vertex index
+                        vi = int(p.split('/')[0]) - 1  # Convert to 0-indexed
+                        face_verts.append(vi)
+                    
+                    if len(face_verts) >= 3:
+                        faces.append(face_verts)
+                        max_face_verts = max(max_face_verts, len(face_verts))
+        
+        if not vertices or not faces:
+            raise ValueError(f"No valid mesh data found in {path}")
+        
+        vertices_arr = np.array(vertices, dtype=np.float64)
+        
+        # Determine mesh type based on max face vertices
+        if max_face_verts == 3:
+            # Pure triangle mesh
+            faces_arr = np.array([f[:3] for f in faces], dtype=np.int64)
+        elif max_face_verts == 4:
+            # Quad or mixed mesh - pad triangles to quads by repeating last vertex
+            padded_faces = []
+            for f in faces:
+                if len(f) == 3:
+                    padded_faces.append([f[0], f[1], f[2], f[2]])  # Repeat last vertex
+                else:
+                    padded_faces.append(f[:4])
+            faces_arr = np.array(padded_faces, dtype=np.int64)
+        else:
+            # N-gons - triangulate
+            import logging
+            logging.getLogger(__name__).warning(f"N-gons found in {path}, triangulating")
+            tri_faces = []
+            for f in faces:
+                # Fan triangulation
+                for i in range(1, len(f) - 1):
+                    tri_faces.append([f[0], f[i], f[i + 1]])
+            faces_arr = np.array(tri_faces, dtype=np.int64)
         
         mesh = cls(
-            vertices=np.asarray(tm.vertices),
-            faces=np.asarray(tm.faces),
+            vertices=vertices_arr,
+            faces=faces_arr,
             name=path.stem,
-            metadata={"source_file": str(path)}
+            metadata={"source_file": str(path), "loader": "quad_aware"}
         )
-        # Store source path for cache validation
         mesh._source_path = str(path.resolve())
         return mesh
+    
+    @classmethod
+    def _load_fbx_via_blender_quad_aware(cls, fbx_path: Path):
+        """Load FBX file by converting through Blender, preserving quads."""
+        import tempfile
+        import subprocess
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        logger.info(f"Converting FBX via Blender: {fbx_path}")
+        
+        # Blender path
+        blender_path = "/Applications/Blender.app/Contents/MacOS/blender"
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            obj_path = Path(tmpdir) / "converted.obj"
+            
+            # Blender script to convert FBX to OBJ (NOT triangulated)
+            script = f'''
+import bpy
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.import_scene.fbx(filepath=r"{fbx_path}")
+bpy.ops.wm.obj_export(filepath=r"{obj_path}", export_selected_objects=False, export_triangulated_mesh=False)
+'''
+            script_path = Path(tmpdir) / "convert.py"
+            script_path.write_text(script)
+            
+            # Run Blender in background
+            result = subprocess.run(
+                [blender_path, "--background", "--python", str(script_path)],
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+            
+            if not obj_path.exists():
+                raise RuntimeError(f"FBX conversion failed: {result.stderr}")
+            
+            logger.info(f"FBX converted successfully")
+            
+            # Use quad-aware OBJ loader instead of trimesh
+            return cls._load_obj_quad_aware(obj_path)
     
     def to_file(self, path: Union[str, Path]) -> None:
         """Save mesh to file."""

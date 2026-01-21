@@ -386,9 +386,28 @@ class TestHarness:
         retopo_config = mesh_config.get("retopology", {})
         target_faces = retopo_config.get("target_faces", 5000)
         backend = retopo_config.get("backend", "hybrid")
+        timeout = settings.get("timeout_seconds", 300)
         
         pipeline = RetopoPipeline(backend=backend)
-        result = pipeline.process(mesh, target_faces=target_faces, evaluate=False)
+        # Enable timeouts for all pipeline stages
+        pipeline.enforce_timeouts = True
+        pipeline.timeout_analysis = min(60, timeout // 5)
+        pipeline.timeout_features = min(60, timeout // 5)
+        pipeline.timeout_remesh = min(180, timeout // 2)
+        pipeline.timeout_postprocess = min(120, timeout // 3)
+        pipeline.timeout_evaluation = min(90, timeout // 4)
+        
+        try:
+            result = pipeline.process(mesh, target_faces=target_faces, evaluate=False)
+        except Exception as e:
+            duration = time.time() - start
+            return TestResult(
+                name="retopology",
+                passed=False,
+                duration=duration,
+                message=f"Pipeline error: {e}",
+                data={"error": str(e)}
+            )
         
         # Handle both tuple return (mesh, score) and single mesh return
         if isinstance(result, tuple):

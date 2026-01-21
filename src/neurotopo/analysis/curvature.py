@@ -263,6 +263,247 @@ class CurvatureAnalyzer:
             ScalarField(k_min, FieldLocation.VERTEX, "principal_min")
         )
     
+    def compute_principal_directions(self, sample_ratio: float = 0.1) -> np.ndarray:
+        """
+        Compute principal curvature directions for each vertex.
+        
+        Returns Nx3 array of principal direction vectors (max curvature direction).
+        These directions are useful for aligning quad edges with the natural
+        flow of the surface - a key technique from RetopoFlow and Instant Meshes.
+        
+        OPTIMIZED: Uses sampling + interpolation for large meshes.
+        - For small meshes (<1000 verts): compute all vertices
+        - For large meshes: sample vertices, compute directions, interpolate
+        
+        Args:
+            sample_ratio: Fraction of vertices to sample for large meshes (default 0.1)
+        
+        Uses local quadric fitting approach.
+        """
+        start_time = time.time()
+        
+        faces = np.array(self.mesh.faces)
+        verts = self.mesh.vertices
+        n_verts = len(verts)
+        
+        # Compute vertex normals
+        if self.mesh.normals is None:
+            self.mesh.compute_normals()
+        normals = self.mesh.normals
+        
+        # Build adjacency using vectorized operations
+        adjacency = self._build_adjacency_fast(faces, n_verts)
+        
+        # Determine if we should use sampling
+        use_sampling = n_verts > 1000
+        
+        if use_sampling:
+            # Sample vertices for direction computation
+            n_samples = max(100, int(n_verts * sample_ratio))
+            sampled_indices = self._select_sample_vertices(n_verts, n_samples, adjacency)
+            directions = self._compute_directions_for_vertices(
+                sampled_indices, verts, normals, adjacency
+            )
+            # Interpolate to all vertices
+            all_directions = self._interpolate_directions(
+                sampled_indices, directions, verts, adjacency
+            )
+        else:
+            # Compute for all vertices directly
+            all_indices = np.arange(n_verts)
+            all_directions = self._compute_directions_for_vertices(
+                all_indices, verts, normals, adjacency
+            )
+        
+        elapsed = time.time() - start_time
+        logger.debug(f"Principal directions: {elapsed:.3f}s (sampling={'yes' if use_sampling else 'no'})")
+        
+        return all_directions
+    
+    def _build_adjacency_fast(self, faces: np.ndarray, n_verts: int) -> list:
+        """Build adjacency list using vectorized operations."""
+        adjacency = [set() for _ in range(n_verts)]
+        
+        # Vectorized edge extraction
+        n_face_verts = faces.shape[1]
+        for i in range(n_face_verts):
+            j = (i + 1) % n_face_verts
+            v0s = faces[:, i]
+            v1s = faces[:, j]
+            
+            for v0, v1 in zip(v0s, v1s):
+                if v0 < n_verts and v1 < n_verts:
+                    adjacency[v0].add(v1)
+                    adjacency[v1].add(v0)
+        
+        return adjacency
+    
+    def _select_sample_vertices(
+        self, 
+        n_verts: int, 
+        n_samples: int, 
+        adjacency: list
+    ) -> np.ndarray:
+        """
+        Select well-distributed sample vertices using approximate farthest point sampling.
+        
+        Uses a greedy approach with local distance tracking for efficiency.
+        """
+        # For small sample counts, just use evenly spaced indices
+        if n_samples > n_verts // 2:
+            # Sample too large, just use all vertices
+            return np.arange(n_verts)
+        
+        # Use simple strided sampling + random perturbation for speed
+        # This is much faster than true farthest point sampling
+        # and provides reasonable distribution
+        stride = n_verts // n_samples
+        base_indices = np.arange(0, n_verts, stride)[:n_samples]
+        
+        # Add some randomness to avoid regular patterns
+        rng = np.random.default_rng(42)
+        perturbation = rng.integers(-stride // 4, stride // 4 + 1, size=len(base_indices))
+        sampled = np.clip(base_indices + perturbation, 0, n_verts - 1)
+        
+        # Ensure unique
+        sampled = np.unique(sampled)
+        
+        # If we don't have enough, fill with random vertices
+        if len(sampled) < n_samples:
+            remaining = np.setdiff1d(np.arange(n_verts), sampled)
+            n_need = min(n_samples - len(sampled), len(remaining))
+            extra = rng.choice(remaining, size=n_need, replace=False)
+            sampled = np.concatenate([sampled, extra])
+        
+        return sampled[:n_samples]
+    
+    def _compute_directions_for_vertices(
+        self,
+        indices: np.ndarray,
+        verts: np.ndarray,
+        normals: np.ndarray,
+        adjacency: list,
+    ) -> np.ndarray:
+        """Compute principal directions for specified vertex indices."""
+        directions = np.zeros((len(indices), 3))
+        
+        for i, vi in enumerate(indices):
+            neighbors = list(adjacency[vi])
+            if len(neighbors) < 3:
+                continue
+            
+            normal = normals[vi]
+            norm_len = np.linalg.norm(normal)
+            if norm_len < 1e-10:
+                continue
+            normal = normal / norm_len
+            
+            # Build local coordinate frame
+            up = np.array([0.0, 1.0, 0.0])
+            if abs(np.dot(normal, up)) > 0.9:
+                up = np.array([1.0, 0.0, 0.0])
+            
+            t1 = np.cross(normal, up)
+            t1 = t1 / np.linalg.norm(t1)
+            t2 = np.cross(normal, t1)
+            
+            # Project neighbors to local tangent plane (vectorized)
+            center = verts[vi]
+            neighbor_verts = verts[neighbors]
+            offsets = neighbor_verts - center
+            
+            # Local coordinates
+            u = np.dot(offsets, t1)
+            v = np.dot(offsets, t2)
+            h = np.dot(offsets, normal)
+            
+            # Fit quadric
+            A = np.column_stack([
+                u**2, v**2, u*v, u, v, np.ones(len(u))
+            ])
+            
+            try:
+                coeffs, _, _, _ = np.linalg.lstsq(A, h, rcond=None)
+                a, b, c = coeffs[:3]
+                
+                # Shape operator (2x2)
+                S = np.array([[2*a, c], [c, 2*b]])
+                eigenvalues, eigenvectors = np.linalg.eigh(S)
+                
+                max_idx = np.argmax(np.abs(eigenvalues))
+                local_dir = eigenvectors[:, max_idx]
+                
+                directions[i] = local_dir[0] * t1 + local_dir[1] * t2
+            except Exception:
+                continue
+        
+        return directions
+    
+    def _interpolate_directions(
+        self,
+        sampled_indices: np.ndarray,
+        sampled_directions: np.ndarray,
+        verts: np.ndarray,
+        adjacency: list,
+    ) -> np.ndarray:
+        """Interpolate directions from sampled vertices to all vertices."""
+        n_verts = len(verts)
+        all_directions = np.zeros((n_verts, 3))
+        
+        # Copy sampled directions
+        for i, vi in enumerate(sampled_indices):
+            all_directions[vi] = sampled_directions[i]
+        
+        # Build KD-tree of sampled vertex positions for fast nearest-neighbor
+        sampled_positions = verts[sampled_indices]
+        
+        # For non-sampled vertices, interpolate from nearest sampled neighbors
+        sampled_set = set(sampled_indices)
+        
+        for vi in range(n_verts):
+            if vi in sampled_set:
+                continue
+            
+            # Find nearest sampled vertices by graph distance
+            # Use BFS to find closest sampled neighbors
+            nearest_sampled = []
+            weights = []
+            
+            queue = [(vi, 0)]
+            visited = {vi}
+            
+            while queue and len(nearest_sampled) < 4:
+                current, dist = queue.pop(0)
+                
+                if current in sampled_set and current != vi:
+                    nearest_sampled.append(current)
+                    weights.append(1.0 / (dist + 1))
+                
+                if dist < 5:  # Limit search depth
+                    for neighbor in adjacency[current]:
+                        if neighbor not in visited:
+                            visited.add(neighbor)
+                            queue.append((neighbor, dist + 1))
+            
+            if nearest_sampled:
+                # Weighted average of directions
+                total_weight = sum(weights)
+                if total_weight > 0:
+                    for j, si in enumerate(nearest_sampled):
+                        # Find index in sampled_indices
+                        try:
+                            idx = np.where(sampled_indices == si)[0][0]
+                            all_directions[vi] += sampled_directions[idx] * weights[j]
+                        except IndexError:
+                            continue
+                    
+                    # Normalize
+                    dir_norm = np.linalg.norm(all_directions[vi])
+                    if dir_norm > 1e-10:
+                        all_directions[vi] /= dir_norm
+        
+        return all_directions
+    
     def _compute_shape_index(self) -> ScalarField:
         """
         Compute shape index (normalized curvature descriptor).
@@ -309,3 +550,13 @@ def compute_curvature(mesh: Mesh, curvature_type: CurvatureType = CurvatureType.
     """Convenience function to compute curvature."""
     analyzer = CurvatureAnalyzer(mesh)
     return analyzer.compute(curvature_type)
+
+
+def compute_principal_directions(mesh: Mesh) -> np.ndarray:
+    """
+    Convenience function to compute principal curvature directions.
+    
+    Returns Nx3 array of direction vectors for quad edge alignment.
+    """
+    analyzer = CurvatureAnalyzer(mesh)
+    return analyzer.compute_principal_directions()

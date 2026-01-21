@@ -71,6 +71,7 @@ class RetopoPipeline:
         self.timeout_features = TIMEOUT_FEATURES
         self.timeout_remesh = TIMEOUT_REMESH
         self.timeout_evaluation = TIMEOUT_EVALUATION
+        self.timeout_postprocess = 120.0  # Post-processing timeout
         self.enforce_timeouts = False  # Set True to kill long operations
         
         # Create components
@@ -216,39 +217,33 @@ class RetopoPipeline:
             except Exception as e:
                 logger.warning(f"Manifold repair failed: {e}")
         
-        # Optional edge flow optimization
-        if edge_flow_optimization and guidance.direction_field is not None:
+        # Enhanced post-processing (RetopoFlow-inspired)
+        with timed_operation("enhanced_postprocess", log=enable_timing):
             try:
-                import trimesh
-                from neurotopo.postprocess import EdgeFlowOptimizer
-                
-                # Create trimesh for projection
-                tri_mesh = mesh.triangulate() if not mesh.is_triangular else mesh
-                tm = trimesh.Trimesh(
-                    vertices=tri_mesh.vertices,
-                    faces=tri_mesh.faces,
-                    process=False
-                )
-                
-                # Get direction field values
-                direction_values = guidance.direction_field.values
-                
-                # Optimize
-                optimizer = EdgeFlowOptimizer(alignment_strength=0.3, iterations=5)
-                optimized_verts = optimizer.optimize(
-                    output_mesh.vertices,
-                    output_mesh.faces,
-                    direction_field=direction_values[:len(output_mesh.vertices)] if len(direction_values) >= len(output_mesh.vertices) else None,
-                    original_mesh=tm,
-                )
-                
-                output_mesh = Mesh(
-                    vertices=optimized_verts,
-                    faces=output_mesh.faces,
-                    name=output_mesh.name
-                )
-            except Exception:
-                pass  # Skip if optimization fails
+                if do_enforce:
+                    output_mesh = run_with_timeout(
+                        self._enhanced_postprocess,
+                        kwargs={
+                            'output_mesh': output_mesh,
+                            'original_mesh': mesh,
+                            'features': features,
+                            'edge_flow_optimization': edge_flow_optimization,
+                            'guidance': guidance,
+                        },
+                        timeout=self.timeout_postprocess,
+                        operation_name="enhanced_postprocess"
+                    )
+                else:
+                    output_mesh = self._enhanced_postprocess(
+                        output_mesh=output_mesh,
+                        original_mesh=mesh,
+                        features=features,
+                        edge_flow_optimization=edge_flow_optimization,
+                        guidance=guidance,
+                    )
+            except TimeoutError:
+                logger.warning("Enhanced postprocess timed out, returning mesh without postprocessing")
+                # Continue with unprocessed mesh rather than failing
         
         # Evaluate with timing
         score = None
@@ -269,6 +264,151 @@ class RetopoPipeline:
             logger.info(timing_log.summary())
         
         return output_mesh, score
+    
+    def _enhanced_postprocess(
+        self,
+        output_mesh: Mesh,
+        original_mesh: Mesh,
+        features,
+        edge_flow_optimization: bool,
+        guidance: GuidanceFields,
+    ) -> Mesh:
+        """
+        Enhanced post-processing with RetopoFlow-inspired techniques.
+        
+        Includes:
+        - Feature edge locking
+        - Surface projection (shrinkwrap)
+        - Principal curvature alignment
+        - Iterative relaxation with projection
+        - Final shrinkwrap pass
+        """
+        try:
+            import trimesh
+            from neurotopo.postprocess import (
+                EnhancedQuadOptimizer,
+                EnhancedOptimizerConfig,
+                relax_with_features,
+            )
+            
+            # Create trimesh for projection
+            tri_mesh = original_mesh.triangulate() if not original_mesh.is_triangular else original_mesh
+            tm = trimesh.Trimesh(
+                vertices=tri_mesh.vertices,
+                faces=tri_mesh.faces,
+                process=False
+            )
+            
+            # Decimate large meshes for faster projection queries
+            # Keep enough detail for accurate surface projection
+            MAX_PROJECTION_FACES = 50000
+            if len(tm.faces) > MAX_PROJECTION_FACES:
+                logger.debug(f"Decimating projection mesh: {len(tm.faces)} -> {MAX_PROJECTION_FACES}")
+                try:
+                    tm = tm.simplify_quadric_decimation(MAX_PROJECTION_FACES)
+                except Exception:
+                    # Fall back if quadric decimation not available
+                    pass
+            
+            # Get feature vertices for locking
+            feature_vertices = None
+            if features is not None:
+                try:
+                    feature_vertices = set(features.get_feature_vertices())
+                    logger.debug(f"Locking {len(feature_vertices)} feature vertices")
+                except Exception:
+                    pass
+            
+            # Compute principal directions for curvature alignment
+            principal_directions = None
+            if edge_flow_optimization:
+                try:
+                    from neurotopo.analysis.curvature import CurvatureAnalyzer
+                    analyzer = CurvatureAnalyzer(original_mesh)
+                    principal_directions = analyzer.compute_principal_directions()
+                except Exception as e:
+                    logger.debug(f"Principal direction computation failed: {e}")
+            
+            # Enhanced optimization with feature locking and shrinkwrap
+            # Use fewer iterations for speed while maintaining quality
+            config = EnhancedOptimizerConfig(
+                iterations=6,  # Reduced from 12 for speed
+                lock_feature_edges=True,
+                lock_boundary=True,
+                final_shrinkwrap=True,
+                project_every_step=False,  # Only project at end for speed
+                align_to_curvature=edge_flow_optimization and principal_directions is not None,
+            )
+            
+            optimizer = EnhancedQuadOptimizer(config)
+            optimized_verts = optimizer.optimize(
+                vertices=output_mesh.vertices,
+                faces=output_mesh.faces,
+                original_mesh=tm,
+                feature_vertices=feature_vertices,
+                principal_directions=principal_directions,
+            )
+            
+            # Light relaxation pass with projection (reduced iterations)
+            relaxed_verts = relax_with_features(
+                vertices=optimized_verts,
+                faces=output_mesh.faces,
+                original_mesh=tm,
+                feature_set=features,
+                iterations=3,  # Reduced from 5
+            )
+            
+            output_mesh = Mesh(
+                vertices=relaxed_verts,
+                faces=output_mesh.faces,
+                name=output_mesh.name
+            )
+            
+        except Exception as e:
+            logger.debug(f"Enhanced post-processing failed: {e}")
+            # Fall back to legacy edge flow optimization if new code fails
+            if edge_flow_optimization and guidance.direction_field is not None:
+                output_mesh = self._legacy_edge_flow_optimization(
+                    output_mesh, original_mesh, guidance
+                )
+        
+        return output_mesh
+    
+    def _legacy_edge_flow_optimization(
+        self,
+        output_mesh: Mesh,
+        original_mesh: Mesh,
+        guidance: GuidanceFields,
+    ) -> Mesh:
+        """Legacy edge flow optimization (fallback)."""
+        try:
+            import trimesh
+            from neurotopo.postprocess import EdgeFlowOptimizer
+            
+            tri_mesh = original_mesh.triangulate() if not original_mesh.is_triangular else original_mesh
+            tm = trimesh.Trimesh(
+                vertices=tri_mesh.vertices,
+                faces=tri_mesh.faces,
+                process=False
+            )
+            
+            direction_values = guidance.direction_field.values
+            
+            optimizer = EdgeFlowOptimizer(alignment_strength=0.3, iterations=5)
+            optimized_verts = optimizer.optimize(
+                output_mesh.vertices,
+                output_mesh.faces,
+                direction_field=direction_values[:len(output_mesh.vertices)] if len(direction_values) >= len(output_mesh.vertices) else None,
+                original_mesh=tm,
+            )
+            
+            return Mesh(
+                vertices=optimized_verts,
+                faces=output_mesh.faces,
+                name=output_mesh.name
+            )
+        except Exception:
+            return output_mesh
     
     def _blend_semantic_guidance(
         self,

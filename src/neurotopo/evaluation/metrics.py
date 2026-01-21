@@ -3,6 +3,11 @@ Quality metrics for retopology evaluation.
 
 Provides comprehensive metrics to objectively measure retopology quality,
 enabling data-driven iteration and improvement.
+
+Performance optimizations:
+- MeshTopologyCache: Single-pass computation of all mesh topology data
+- Vectorized quad quality metrics using NumPy broadcasting
+- Efficient edge/valence computation with pre-allocated arrays
 """
 
 from __future__ import annotations
@@ -10,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Dict, Tuple
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -18,6 +23,175 @@ from neurotopo.core.mesh import Mesh
 from neurotopo.evaluation.visual import VisualEvaluator, VisualQualityMetrics
 
 logger = logging.getLogger("neurotopo.evaluation")
+
+
+@dataclass
+class MeshTopologyCache:
+    """
+    Pre-computed mesh topology data for efficient metric computation.
+    
+    Computes all topology information in a single pass through the mesh,
+    avoiding redundant traversals in individual metric functions.
+    """
+    # Basic counts
+    num_vertices: int
+    num_faces: int
+    num_edges: int
+    
+    # Valence data
+    valence: np.ndarray  # Per-vertex valence
+    valence_histogram: Dict[int, int]
+    
+    # Edge data
+    edge_count: Dict[Tuple[int, int], int]  # Edge -> face count
+    boundary_edges: int
+    non_manifold_edges: int
+    
+    # Face angles (for quad quality)
+    face_angles: np.ndarray  # F x 4 angles per face (for quads)
+    face_aspect_ratios: np.ndarray  # F aspect ratios
+    face_types: np.ndarray  # 3=tri, 4=quad, 0=degenerate
+    
+    # Curvature (for pole analysis)
+    vertex_curvature: np.ndarray  # Per-vertex curvature estimate
+    
+    @classmethod
+    def from_mesh(cls, mesh: Mesh) -> 'MeshTopologyCache':
+        """Build topology cache from mesh in a single pass."""
+        n_verts = mesh.num_vertices
+        n_faces = mesh.num_faces
+        is_quad_mesh = mesh.is_quad
+        
+        # Pre-allocate arrays
+        # NOTE: We compute EDGE valence (number of edges per vertex), not face valence
+        # This is the correct metric for topology guidelines (valence 4 = regular for quads)
+        edge_valence = np.zeros(n_verts, dtype=np.int32)
+        vertex_angle_sum = np.zeros(n_verts, dtype=np.float64)
+        
+        # Edge tracking - use set for unique edges
+        edge_set = set()
+        edge_count = {}
+        
+        # Face data
+        face_angles = np.zeros((n_faces, 4), dtype=np.float64)
+        face_aspect_ratios = np.zeros(n_faces, dtype=np.float64)
+        face_types = np.zeros(n_faces, dtype=np.int32)
+        
+        # Single pass through all faces
+        for fi, face in enumerate(mesh.faces):
+            unique_verts = list(dict.fromkeys(face))  # Preserve order, remove duplicates
+            n_unique = len(unique_verts)
+            
+            # Determine face type
+            if n_unique < 3:
+                face_types[fi] = 0  # Degenerate
+                continue
+            elif n_unique == 3:
+                face_types[fi] = 3  # Triangle
+            else:
+                face_types[fi] = 4  # Quad
+            
+            # Build edges and track valence
+            for i in range(n_unique):
+                v0, v1 = unique_verts[i], unique_verts[(i + 1) % n_unique]
+                if v0 != v1:
+                    edge = (min(v0, v1), max(v0, v1))
+                    edge_count[edge] = edge_count.get(edge, 0) + 1
+                    
+                    # Only count edge for valence if we haven't seen it
+                    if edge not in edge_set:
+                        edge_set.add(edge)
+                        edge_valence[v0] += 1
+                        edge_valence[v1] += 1
+            
+            # Compute face geometry
+            verts = mesh.vertices[unique_verts]
+            
+            if n_unique == 4:
+                # Quad - compute all 4 angles and aspect ratio
+                edges = np.array([
+                    np.linalg.norm(verts[(i+1)%4] - verts[i])
+                    for i in range(4)
+                ])
+                
+                if edges.min() > 1e-10:
+                    face_aspect_ratios[fi] = edges.max() / edges.min()
+                else:
+                    face_aspect_ratios[fi] = 10.0  # Degenerate
+                
+                # Compute angles
+                for i in range(4):
+                    p0 = verts[(i - 1) % 4]
+                    p1 = verts[i]
+                    p2 = verts[(i + 1) % 4]
+                    
+                    e1 = p0 - p1
+                    e2 = p2 - p1
+                    n1, n2 = np.linalg.norm(e1), np.linalg.norm(e2)
+                    
+                    if n1 > 1e-10 and n2 > 1e-10:
+                        cos_angle = np.clip(np.dot(e1, e2) / (n1 * n2), -1, 1)
+                        angle = np.arccos(cos_angle)
+                        face_angles[fi, i] = angle
+                        vertex_angle_sum[unique_verts[i]] += angle
+                    else:
+                        face_angles[fi, i] = np.pi / 2
+                        
+            elif n_unique == 3:
+                # Triangle
+                edges = np.array([
+                    np.linalg.norm(verts[(i+1)%3] - verts[i])
+                    for i in range(3)
+                ])
+                
+                if edges.min() > 1e-10:
+                    face_aspect_ratios[fi] = edges.max() / edges.min()
+                else:
+                    face_aspect_ratios[fi] = 10.0
+                
+                for i in range(3):
+                    p0 = verts[(i - 1) % 3]
+                    p1 = verts[i]
+                    p2 = verts[(i + 1) % 3]
+                    
+                    e1 = p0 - p1
+                    e2 = p2 - p1
+                    n1, n2 = np.linalg.norm(e1), np.linalg.norm(e2)
+                    
+                    if n1 > 1e-10 and n2 > 1e-10:
+                        cos_angle = np.clip(np.dot(e1, e2) / (n1 * n2), -1, 1)
+                        angle = np.arccos(cos_angle)
+                        face_angles[fi, i] = angle
+                        vertex_angle_sum[unique_verts[i]] += angle
+                    else:
+                        face_angles[fi, i] = np.pi / 3
+        
+        # Compute derived values
+        boundary_edges = sum(1 for c in edge_count.values() if c == 1)
+        non_manifold_edges = sum(1 for c in edge_count.values() if c > 2)
+        
+        # Valence histogram (using edge valence, not face count)
+        valence_hist = {}
+        for v in edge_valence:
+            valence_hist[int(v)] = valence_hist.get(int(v), 0) + 1
+        
+        # Vertex curvature (angle deficit method)
+        vertex_curvature = np.abs(2 * np.pi - vertex_angle_sum)
+        
+        return cls(
+            num_vertices=n_verts,
+            num_faces=n_faces,
+            num_edges=len(edge_count),
+            valence=edge_valence,  # Now correctly using edge valence
+            valence_histogram=valence_hist,
+            edge_count=edge_count,
+            boundary_edges=boundary_edges,
+            non_manifold_edges=non_manifold_edges,
+            face_angles=face_angles,
+            face_aspect_ratios=face_aspect_ratios,
+            face_types=face_types,
+            vertex_curvature=vertex_curvature,
+        )
 
 
 @dataclass
@@ -306,12 +480,18 @@ class MeshEvaluator:
     Comprehensive mesh quality evaluator.
     
     Computes all metrics needed to assess retopology quality.
+    
+    Performance optimized:
+    - Uses MeshTopologyCache for single-pass topology computation
+    - Vectorized metric calculations with NumPy
+    - Shared cache across all metric functions
     """
     
     def __init__(self, sample_count: int = 10000, enable_visual: bool = True):
         self.sample_count = sample_count
         self.enable_visual = enable_visual
         self._visual_evaluator = None
+        self._topo_cache: Optional[MeshTopologyCache] = None
     
     @property
     def visual_evaluator(self) -> VisualEvaluator:
@@ -337,9 +517,14 @@ class MeshEvaluator:
         """
         start_time = time.time()
         
-        # Compute quad quality
+        # Build topology cache ONCE for all metrics
         t0 = time.time()
-        quad_quality = self._compute_quad_quality(retopo_mesh)
+        self._topo_cache = MeshTopologyCache.from_mesh(retopo_mesh)
+        logger.debug(f"Topology cache built: {time.time() - t0:.3f}s")
+        
+        # Compute quad quality using cache
+        t0 = time.time()
+        quad_quality = self._compute_quad_quality_cached(retopo_mesh)
         logger.debug(f"Quad quality computation: {time.time() - t0:.3f}s")
         
         # Compute geometric fidelity (if original provided)
@@ -358,9 +543,9 @@ class MeshEvaluator:
             )
             reference_diagonal = retopo_mesh.diagonal
         
-        # Compute topology metrics
+        # Compute topology metrics using cache
         t0 = time.time()
-        topology = self._compute_topology(retopo_mesh)
+        topology = self._compute_topology_cached(retopo_mesh)
         logger.debug(f"Topology computation: {time.time() - t0:.3f}s")
         
         # Compute visual quality metrics
@@ -382,145 +567,190 @@ class MeshEvaluator:
         total_time = time.time() - start_time
         logger.info(f"Evaluation complete in {total_time:.2f}s, score: {score.overall_score:.1f}")
         
+        # Clear cache
+        self._topo_cache = None
+        
         return score
     
-    def _compute_quad_quality(self, mesh: Mesh) -> QuadQualityMetrics:
-        """Compute quad-specific quality metrics."""
-        aspect_ratios = []
+    def _compute_quad_quality_cached(self, mesh: Mesh) -> QuadQualityMetrics:
+        """Compute quad quality metrics using pre-computed cache."""
+        cache = self._topo_cache
+        
+        # Filter to valid faces
+        quad_mask = cache.face_types == 4
+        tri_mask = cache.face_types == 3
+        
+        # Get aspect ratios for valid faces
+        valid_mask = (cache.face_types == 4) | (cache.face_types == 3)
+        aspect_ratios = cache.face_aspect_ratios[valid_mask]
+        
+        # Compute angle deviations
+        # For quads: deviation from 90 degrees (π/2)
+        # For tris: deviation from 60 degrees (π/3)
         angle_deviations = []
-        quad_count = 0
-        tri_count = 0
         
-        for face in mesh.faces:
-            unique_verts = len(set(face))
-            vertices = mesh.vertices[face]
-            
-            # Handle degenerate quads (stored as [a,b,c,c]) - skip them
-            # They are artifacts from triangle pairing that failed and shouldn't
-            # contribute to quality metrics
-            if len(face) == 4 and unique_verts == 4:
-                # True quad - evaluate as quad
-                quad_count += 1
-                ar = self._quad_aspect_ratio(vertices)
-                angles = self._quad_angles(vertices)
-                # For quads, ideal angle is 90 degrees
-                angle_deviations.extend([abs(a - np.pi/2) for a in angles])
-                aspect_ratios.append(ar)
-            elif len(face) == 4 and unique_verts == 3:
-                # Degenerate quad (triangle with repeated vertex)
-                # Skip these - they're artifacts, not real geometry
-                # The remesher should ideally not produce these
-                continue
-            elif len(face) == 3:
-                # Regular triangle
-                tri_count += 1
-                ar = self._triangle_aspect_ratio(vertices)
-                angles = self._triangle_angles(vertices)
-                angle_deviations.extend([abs(a - np.pi/3) for a in angles])
-                aspect_ratios.append(ar)
-            else:
-                # Skip invalid faces
-                continue
+        if np.any(quad_mask):
+            quad_angles = cache.face_angles[quad_mask, :4]
+            quad_angle_devs = np.abs(quad_angles - np.pi / 2)
+            angle_deviations.extend(quad_angle_devs.flatten())
         
-        # Compute valence histogram (use unique vertices per face)
-        valence = np.zeros(mesh.num_vertices, dtype=int)
-        for face in mesh.faces:
-            for vi in set(face):  # Use set to handle degenerate quads
-                valence[vi] += 1
+        if np.any(tri_mask):
+            tri_angles = cache.face_angles[tri_mask, :3]
+            tri_angle_devs = np.abs(tri_angles - np.pi / 3)
+            angle_deviations.extend(tri_angle_devs.flatten())
         
-        valence_hist = {}
-        for v in valence:
-            valence_hist[int(v)] = valence_hist.get(int(v), 0) + 1
+        if not angle_deviations:
+            angle_deviations = [0.0]
         
-        # Irregular vertex ratio (not valence 4 for interior, not 2-4 for boundary)
+        angle_deviations = np.array(angle_deviations)
+        
+        # Irregular vertex ratio
         target_valence = 4 if mesh.is_quad else 6
-        irregular = np.sum(valence != target_valence) / len(valence)
+        irregular = np.sum(cache.valence != target_valence) / max(1, len(cache.valence))
         
-        # Compute pole analysis (topology-informed metric)
-        pole_analysis = self._compute_pole_analysis(mesh, valence)
+        # Pole analysis using cached curvature
+        pole_analysis = self._compute_pole_analysis_cached(mesh)
         
-        # Compute edge loop metrics
-        edge_loop_metrics = self._compute_edge_loop_metrics(mesh)
+        # Edge loop metrics
+        edge_loop_metrics = self._compute_edge_loop_metrics_cached(mesh)
         
         return QuadQualityMetrics(
-            aspect_ratio_mean=float(np.mean(aspect_ratios)),
-            aspect_ratio_std=float(np.std(aspect_ratios)),
+            aspect_ratio_mean=float(np.mean(aspect_ratios)) if len(aspect_ratios) > 0 else 1.0,
+            aspect_ratio_std=float(np.std(aspect_ratios)) if len(aspect_ratios) > 0 else 0.0,
             angle_deviation_mean=float(np.mean(angle_deviations)),
             angle_deviation_std=float(np.std(angle_deviations)),
-            valence_histogram=valence_hist,
+            valence_histogram=cache.valence_histogram,
             irregular_vertex_ratio=float(irregular),
             pole_analysis=pole_analysis,
-            edge_loop_metrics=edge_loop_metrics
+            edge_loop_metrics=edge_loop_metrics,
         )
     
-    def _quad_aspect_ratio(self, vertices: np.ndarray) -> float:
-        """Compute aspect ratio of a quad."""
-        if len(vertices) != 4:
-            return 1.0
+    def _compute_topology_cached(self, mesh: Mesh) -> TopologyMetrics:
+        """Compute topology metrics using pre-computed cache."""
+        cache = self._topo_cache
         
-        # Edge lengths
-        edges = [
-            np.linalg.norm(vertices[(i+1)%4] - vertices[i])
-            for i in range(4)
-        ]
+        # Euler characteristic
+        euler = cache.num_vertices - cache.num_edges + cache.num_faces
         
-        # Aspect ratio: max/min edge length
-        if min(edges) < 1e-10:
-            return 10.0  # Degenerate
+        # Manifold check
+        is_manifold = cache.non_manifold_edges == 0
         
-        return max(edges) / min(edges)
+        # Boundaries
+        n_boundaries = 1 if cache.boundary_edges > 0 else 0
+        
+        # Genus
+        genus = max(0, (2 - euler - n_boundaries) // 2)
+        
+        # Pole quality score
+        n3_poles = int(np.sum(cache.valence == 3))
+        n5_poles = int(np.sum(cache.valence == 5))
+        n6_plus = int(np.sum(cache.valence >= 6))
+        
+        if cache.num_vertices > 0:
+            n6_plus_ratio = n6_plus / cache.num_vertices
+            total_poles = n3_poles + n5_poles + n6_plus
+            pole_density = total_poles / cache.num_vertices
+            pole_penalty = (n6_plus_ratio * 50) + max(0, (pole_density - 0.5) * 20)
+        else:
+            pole_penalty = 0
+        
+        pole_quality_score = max(0.0, min(100.0, 100.0 - pole_penalty))
+        
+        # Edge flow score
+        edge_flow_score = self._compute_edge_flow_score_cached(mesh)
+        
+        return TopologyMetrics(
+            num_vertices=cache.num_vertices,
+            num_faces=cache.num_faces,
+            num_edges=cache.num_edges,
+            euler_characteristic=euler,
+            num_boundaries=n_boundaries,
+            is_manifold=is_manifold,
+            genus=genus,
+            pole_quality_score=pole_quality_score,
+            edge_flow_score=edge_flow_score,
+        )
     
-    def _quad_angles(self, vertices: np.ndarray) -> list[float]:
-        """Compute interior angles of a quad."""
-        angles = []
-        for i in range(4):
-            p0 = vertices[(i-1) % 4]
-            p1 = vertices[i]
-            p2 = vertices[(i+1) % 4]
-            
-            e1 = p0 - p1
-            e2 = p2 - p1
-            
-            n1, n2 = np.linalg.norm(e1), np.linalg.norm(e2)
-            if n1 < 1e-10 or n2 < 1e-10:
-                angles.append(np.pi/2)
-            else:
-                cos_angle = np.clip(np.dot(e1, e2) / (n1 * n2), -1, 1)
-                angles.append(np.arccos(cos_angle))
+    def _compute_pole_analysis_cached(self, mesh: Mesh) -> PoleAnalysis:
+        """Compute pole analysis using cached data."""
+        cache = self._topo_cache
         
-        return angles
+        n3_poles = int(np.sum(cache.valence == 3))
+        n5_poles = int(np.sum(cache.valence == 5))
+        n6_plus = int(np.sum(cache.valence >= 6))
+        total_poles = n3_poles + n5_poles + n6_plus
+        
+        pole_ratio = total_poles / max(1, cache.num_vertices)
+        
+        # Find poles and check curvature
+        pole_indices = np.where((cache.valence != 4) & (cache.valence > 0))[0]
+        
+        if len(cache.vertex_curvature) > 0 and len(pole_indices) > 0:
+            curvature_threshold = np.percentile(cache.vertex_curvature, 75)
+            poles_in_high_curve = int(np.sum(cache.vertex_curvature[pole_indices] > curvature_threshold))
+        else:
+            poles_in_high_curve = 0
+        
+        if total_poles > 0:
+            pole_placement_score = 1.0 - (poles_in_high_curve / total_poles)
+        else:
+            pole_placement_score = 1.0
+        
+        return PoleAnalysis(
+            total_poles=total_poles,
+            n3_poles=n3_poles,
+            n5_poles=n5_poles,
+            n6_plus_poles=n6_plus,
+            pole_ratio=pole_ratio,
+            poles_in_high_curvature=poles_in_high_curve,
+            pole_placement_score=pole_placement_score,
+        )
     
-    def _triangle_aspect_ratio(self, vertices: np.ndarray) -> float:
-        """Compute aspect ratio of a triangle."""
-        edges = [
-            np.linalg.norm(vertices[(i+1)%3] - vertices[i])
-            for i in range(3)
-        ]
+    def _compute_edge_loop_metrics_cached(self, mesh: Mesh) -> EdgeLoopMetrics:
+        """Compute edge loop metrics using cached data."""
+        cache = self._topo_cache
         
-        if min(edges) < 1e-10:
-            return 10.0
+        if not mesh.is_quad:
+            return EdgeLoopMetrics(
+                avg_loop_length=0.0,
+                loop_continuity_score=0.5,
+                loop_alignment_score=0.5,
+            )
         
-        return max(edges) / min(edges)
+        # Count interior edges (those that can form loops)
+        interior_edges = sum(1 for c in cache.edge_count.values() if c == 2)
+        total_edges = len(cache.edge_count)
+        
+        if total_edges == 0:
+            return EdgeLoopMetrics(
+                avg_loop_length=0.0,
+                loop_continuity_score=0.0,
+                loop_alignment_score=0.0,
+            )
+        
+        loop_continuity = interior_edges / total_edges
+        avg_loop_length = 4.0 * loop_continuity * 10
+        
+        return EdgeLoopMetrics(
+            avg_loop_length=avg_loop_length,
+            loop_continuity_score=loop_continuity,
+            loop_alignment_score=loop_continuity,
+        )
     
-    def _triangle_angles(self, vertices: np.ndarray) -> list[float]:
-        """Compute interior angles of a triangle."""
-        angles = []
-        for i in range(3):
-            p0 = vertices[(i-1) % 3]
-            p1 = vertices[i]
-            p2 = vertices[(i+1) % 3]
-            
-            e1 = p0 - p1
-            e2 = p2 - p1
-            
-            n1, n2 = np.linalg.norm(e1), np.linalg.norm(e2)
-            if n1 < 1e-10 or n2 < 1e-10:
-                angles.append(np.pi/3)
-            else:
-                cos_angle = np.clip(np.dot(e1, e2) / (n1 * n2), -1, 1)
-                angles.append(np.arccos(cos_angle))
+    def _compute_edge_flow_score_cached(self, mesh: Mesh) -> float:
+        """Compute edge flow score using cached data."""
+        cache = self._topo_cache
         
-        return angles
+        if not mesh.is_quad:
+            return 75.0
+        
+        interior_edges = sum(1 for c in cache.edge_count.values() if c == 2)
+        total_edges = len(cache.edge_count)
+        
+        if total_edges == 0:
+            return 50.0
+        
+        return (interior_edges / total_edges) * 100.0
     
     def _compute_fidelity(
         self, 
@@ -614,306 +844,6 @@ class MeshEvaluator:
         )
         
         return samples
-    
-    def _compute_topology(self, mesh: Mesh) -> TopologyMetrics:
-        """Compute topological metrics."""
-        n_vertices = mesh.num_vertices
-        n_faces = mesh.num_faces
-        
-        # Helper to get unique vertices in a face (handles degenerate quads)
-        def get_face_verts(face):
-            """Get unique vertices in face preserving order."""
-            seen = set()
-            result = []
-            for v in face:
-                if v not in seen:
-                    seen.add(v)
-                    result.append(v)
-            return result
-        
-        # Count edges, properly handling degenerate quads
-        edges = set()
-        for face in mesh.faces:
-            verts = get_face_verts(face)
-            n = len(verts)
-            if n < 3:
-                continue  # Skip degenerate faces
-            for i in range(n):
-                v0, v1 = verts[i], verts[(i + 1) % n]
-                if v0 != v1:  # Skip self-loops
-                    edges.add((min(v0, v1), max(v0, v1)))
-        n_edges = len(edges)
-        
-        # Euler characteristic: V - E + F
-        euler = n_vertices - n_edges + n_faces
-        
-        # Check manifold (each edge should have exactly 2 adjacent faces)
-        edge_count = {}
-        for face in mesh.faces:
-            verts = get_face_verts(face)
-            n = len(verts)
-            if n < 3:
-                continue  # Skip degenerate faces
-            for i in range(n):
-                v0, v1 = verts[i], verts[(i + 1) % n]
-                if v0 != v1:  # Skip self-loops
-                    edge = (min(v0, v1), max(v0, v1))
-                    edge_count[edge] = edge_count.get(edge, 0) + 1
-        
-        boundary_edges = sum(1 for c in edge_count.values() if c == 1)
-        non_manifold_edges = sum(1 for c in edge_count.values() if c > 2)
-        is_manifold = non_manifold_edges == 0
-        
-        # Count boundary loops (simplified)
-        n_boundaries = 1 if boundary_edges > 0 else 0
-        
-        # Genus: g = (2 - euler - boundaries) / 2
-        genus = max(0, (2 - euler - n_boundaries) // 2)
-        
-        # Compute pole quality score (0-100)
-        # Based on valence distribution - penalize high-valence poles heavily
-        valence = np.zeros(mesh.num_vertices, dtype=int)
-        for face in mesh.faces:
-            for vi in set(face):
-                valence[vi] += 1
-        
-        n3_poles = np.sum(valence == 3)
-        n5_poles = np.sum(valence == 5)
-        n6_plus = np.sum(valence >= 6)
-        total_poles = n3_poles + n5_poles + n6_plus
-        
-        # Score: penalize high-valence poles, 3/5 poles are acceptable
-        # 6+ poles are problematic (cause subdivision artifacts)
-        # Use proportion-based penalty:
-        # - 6+ poles: up to 50 points penalty based on their ratio to total vertices
-        # - Total poles: small penalty for high pole density
-        if n_vertices > 0:
-            n6_plus_ratio = n6_plus / n_vertices  # 0 to 1
-            pole_density = total_poles / n_vertices  # typically 0.3-0.9
-            
-            # 50% of vertices being 6+ poles = max 50 point penalty
-            # High pole density (>50%) adds small penalty
-            pole_penalty = (n6_plus_ratio * 50) + max(0, (pole_density - 0.5) * 20)
-        else:
-            pole_penalty = 0
-        
-        pole_quality_score = max(0.0, min(100.0, 100.0 - pole_penalty))
-        
-        # Compute edge flow score based on edge loop continuity
-        # Better loops = higher score
-        edge_flow_score = self._compute_edge_flow_score(mesh, edge_count)
-        
-        return TopologyMetrics(
-            num_vertices=n_vertices,
-            num_faces=n_faces,
-            num_edges=n_edges,
-            euler_characteristic=euler,
-            num_boundaries=n_boundaries,
-            is_manifold=is_manifold,
-            genus=genus,
-            pole_quality_score=pole_quality_score,
-            edge_flow_score=edge_flow_score
-        )
-    
-    def _compute_pole_analysis(self, mesh: Mesh, valence: np.ndarray) -> PoleAnalysis:
-        """
-        Analyze pole (non-valence-4 vertex) distribution and placement.
-        
-        Topology best practice: poles should be in flat areas, not deformation zones.
-        """
-        n_vertices = len(valence)
-        
-        # Count poles by type
-        n3_poles = int(np.sum(valence == 3))
-        n5_poles = int(np.sum(valence == 5))
-        n6_plus = int(np.sum(valence >= 6))
-        total_poles = n3_poles + n5_poles + n6_plus
-        
-        pole_ratio = total_poles / max(1, n_vertices)
-        
-        # Identify poles
-        pole_indices = np.where((valence != 4) & (valence > 0))[0]
-        
-        # Compute curvature at each vertex to assess pole placement
-        # High curvature = deformation area = bad for poles
-        curvatures = self._estimate_vertex_curvature(mesh)
-        
-        # Count poles in high-curvature regions (top 25% of curvature)
-        if len(curvatures) > 0 and len(pole_indices) > 0:
-            curvature_threshold = np.percentile(curvatures, 75)
-            poles_in_high_curve = int(np.sum(curvatures[pole_indices] > curvature_threshold))
-        else:
-            poles_in_high_curve = 0
-        
-        # Pole placement score: 1.0 if all poles in flat areas, 0.0 if all in curved areas
-        if total_poles > 0:
-            pole_placement_score = 1.0 - (poles_in_high_curve / total_poles)
-        else:
-            pole_placement_score = 1.0  # No poles = perfect
-        
-        return PoleAnalysis(
-            total_poles=total_poles,
-            n3_poles=n3_poles,
-            n5_poles=n5_poles,
-            n6_plus_poles=n6_plus,
-            pole_ratio=pole_ratio,
-            poles_in_high_curvature=poles_in_high_curve,
-            pole_placement_score=pole_placement_score
-        )
-    
-    def _estimate_vertex_curvature(self, mesh: Mesh) -> np.ndarray:
-        """
-        Estimate discrete curvature at each vertex.
-        
-        Uses angle deficit method: curvature = 2π - sum of angles at vertex.
-        Higher absolute values = more curved = worse for poles.
-        """
-        curvatures = np.zeros(mesh.num_vertices)
-        angle_sums = np.zeros(mesh.num_vertices)
-        
-        for face in mesh.faces:
-            unique_verts = list(set(face))
-            if len(unique_verts) < 3:
-                continue
-            
-            vertices = mesh.vertices[unique_verts]
-            n = len(unique_verts)
-            
-            for i in range(n):
-                vi = unique_verts[i]
-                p0 = vertices[(i - 1) % n]
-                p1 = vertices[i]
-                p2 = vertices[(i + 1) % n]
-                
-                e1 = p0 - p1
-                e2 = p2 - p1
-                n1, n2 = np.linalg.norm(e1), np.linalg.norm(e2)
-                
-                if n1 > 1e-10 and n2 > 1e-10:
-                    cos_angle = np.clip(np.dot(e1, e2) / (n1 * n2), -1, 1)
-                    angle_sums[vi] += np.arccos(cos_angle)
-        
-        # Angle deficit: for interior vertex, ideal is 2π
-        curvatures = np.abs(2 * np.pi - angle_sums)
-        
-        return curvatures
-    
-    def _compute_edge_loop_metrics(self, mesh: Mesh) -> EdgeLoopMetrics:
-        """
-        Compute edge loop quality metrics.
-        
-        Good edge loops:
-        - Form continuous paths around the mesh
-        - Follow curvature directions
-        - Enable easy ring selection
-        """
-        # Build edge-to-face and vertex-to-edge maps
-        edge_faces = {}
-        vertex_edges = {}
-        
-        for fi, face in enumerate(mesh.faces):
-            unique_verts = list(set(face))
-            n = len(unique_verts)
-            if n < 3:
-                continue
-            
-            for i in range(n):
-                v0, v1 = unique_verts[i], unique_verts[(i + 1) % n]
-                if v0 == v1:
-                    continue
-                edge = (min(v0, v1), max(v0, v1))
-                
-                if edge not in edge_faces:
-                    edge_faces[edge] = []
-                edge_faces[edge].append(fi)
-                
-                for v in [v0, v1]:
-                    if v not in vertex_edges:
-                        vertex_edges[v] = set()
-                    vertex_edges[v].add(edge)
-        
-        # For quad meshes, try to trace edge loops
-        # An edge loop in quads follows edges that cross opposite sides of each quad
-        if not mesh.is_quad:
-            # For triangle meshes, edge loops are less defined
-            return EdgeLoopMetrics(
-                avg_loop_length=0.0,
-                loop_continuity_score=0.5,  # Neutral for tri meshes
-                loop_alignment_score=0.5
-            )
-        
-        # Count how many edges are part of "continuable" loops
-        # An edge is continuable if it has exactly one edge continuing on each end
-        continuable_edges = 0
-        total_interior_edges = 0
-        
-        for edge, faces in edge_faces.items():
-            if len(faces) != 2:
-                continue  # Skip boundary edges
-            
-            total_interior_edges += 1
-            
-            # Check if this edge can continue through each adjacent face
-            v0, v1 = edge
-            can_continue = True
-            
-            for fi in faces:
-                face = mesh.faces[fi]
-                unique_verts = list(set(face))
-                if len(unique_verts) != 4:
-                    can_continue = False
-                    break
-                
-                # In a quad, an edge loop crosses to the opposite edge
-                # Check if opposite edge exists
-                idx0 = unique_verts.index(v0) if v0 in unique_verts else -1
-                idx1 = unique_verts.index(v1) if v1 in unique_verts else -1
-                
-                if idx0 < 0 or idx1 < 0:
-                    can_continue = False
-                    break
-            
-            if can_continue:
-                continuable_edges += 1
-        
-        # Loop continuity: ratio of edges that can form loops
-        if total_interior_edges > 0:
-            loop_continuity = continuable_edges / total_interior_edges
-        else:
-            loop_continuity = 0.0
-        
-        # Simplified loop length estimation (would need full tracing for accuracy)
-        avg_loop_length = 4.0 * loop_continuity * 10  # Rough estimate
-        
-        return EdgeLoopMetrics(
-            avg_loop_length=avg_loop_length,
-            loop_continuity_score=loop_continuity,
-            loop_alignment_score=loop_continuity  # Simplified: use same as continuity
-        )
-    
-    def _compute_edge_flow_score(self, mesh: Mesh, edge_count: dict) -> float:
-        """
-        Compute edge flow quality score (0-100).
-        
-        Better edge flow = more edges can form continuous loops.
-        """
-        if not mesh.is_quad:
-            return 75.0  # Neutral for triangle meshes
-        
-        # Count edges by their "loop potential"
-        # Interior edges (count=2) have loop potential
-        # Boundary edges (count=1) don't
-        interior_edges = sum(1 for c in edge_count.values() if c == 2)
-        total_edges = len(edge_count)
-        
-        if total_edges == 0:
-            return 50.0
-        
-        # Higher ratio of interior edges = better edge flow
-        interior_ratio = interior_edges / total_edges
-        
-        # Scale to 0-100
-        return interior_ratio * 100.0
 
 
 def evaluate_retopology(

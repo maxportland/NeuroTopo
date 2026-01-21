@@ -4,6 +4,7 @@ Advanced triangle-to-quad conversion algorithms.
 Converts triangular meshes to quad-dominant meshes using
 various algorithms:
 - Greedy pairing with quality scoring
+- Valence-aware pairing to minimize irregular vertices
 - Instant Meshes-style field-guided conversion
 - Catmull-Clark subdivision with simplification
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 from typing import Optional
 from scipy.spatial import cKDTree
+from collections import defaultdict
 
 
 class TriToQuadConverter:
@@ -20,7 +22,7 @@ class TriToQuadConverter:
     Convert triangular mesh to quad-dominant mesh.
     
     Uses quality-aware triangle pairing with optional
-    direction field guidance.
+    direction field guidance and valence optimization.
     """
     
     def __init__(
@@ -29,11 +31,13 @@ class TriToQuadConverter:
         prefer_regular: bool = True,
         max_valence_deviation: int = 2,
         edge_swap_iterations: int = 0,  # Disabled - slow and can cause manifold issues
+        valence_weight: float = 0.3,  # Weight for valence regularity in scoring
     ):
         self.min_quality = min_quality
         self.prefer_regular = prefer_regular
         self.max_valence_deviation = max_valence_deviation
         self.edge_swap_iterations = edge_swap_iterations
+        self.valence_weight = valence_weight
     
     def convert(
         self,
@@ -59,17 +63,34 @@ class TriToQuadConverter:
         # Build topology
         edge_faces = self._build_edge_face_map(faces)
         
+        # Compute initial vertex valence for valence-aware pairing
+        initial_valence = self._compute_vertex_valence(faces, len(vertices))
+        
         # Score all potential pairings
         pairings = self._score_pairings(
-            vertices, faces, edge_faces, direction_field
+            vertices, faces, edge_faces, direction_field, initial_valence
         )
         
-        # Greedily select best pairings
-        quads, remaining_tris = self._greedy_select(
-            faces, pairings
+        # Greedily select best pairings with valence tracking
+        quads, remaining_tris = self._greedy_select_valence_aware(
+            faces, pairings, len(vertices)
         )
         
         return vertices, quads, remaining_tris
+    
+    def _compute_vertex_valence(self, faces: np.ndarray, num_verts: int) -> np.ndarray:
+        """Compute valence (edge count) for each vertex."""
+        edges = set()
+        for face in faces:
+            for i in range(len(face)):
+                v0, v1 = int(face[i]), int(face[(i + 1) % len(face)])
+                edges.add((min(v0, v1), max(v0, v1)))
+        
+        valence = np.zeros(num_verts, dtype=np.int32)
+        for e in edges:
+            valence[e[0]] += 1
+            valence[e[1]] += 1
+        return valence
     
     def _optimize_edges(self, vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
         """
@@ -174,8 +195,9 @@ class TriToQuadConverter:
         faces: np.ndarray,
         edge_faces: dict,
         direction_field: Optional[np.ndarray],
+        initial_valence: np.ndarray,
     ) -> list:
-        """Score all possible triangle pairings."""
+        """Score all possible triangle pairings with valence awareness."""
         pairings = []
         
         for edge, face_list in edge_faces.items():
@@ -196,7 +218,7 @@ class TriToQuadConverter:
                 vertices, other0, v0, other1, v1
             )
             
-            # Compute quality score
+            # Compute base quality score
             quality = self._quad_quality_score(vertices[quad])
             
             # Add direction field alignment bonus
@@ -204,12 +226,67 @@ class TriToQuadConverter:
                 alignment = self._direction_alignment(
                     vertices, quad, direction_field
                 )
-                quality = quality * 0.7 + alignment * 0.3
+                quality = quality * 0.6 + alignment * 0.2
+            
+            # Add valence regularity bonus/penalty
+            if self.prefer_regular and self.valence_weight > 0:
+                valence_score = self._valence_impact_score(
+                    quad, edge, initial_valence
+                )
+                quality = quality * (1 - self.valence_weight) + valence_score * self.valence_weight
             
             if quality >= self.min_quality:
                 pairings.append((quality, f0, f1, quad))
         
         return pairings
+    
+    def _valence_impact_score(
+        self,
+        quad: list,
+        removed_edge: tuple,
+        valence: np.ndarray,
+    ) -> float:
+        """
+        Score the impact of this pairing on vertex valence regularity.
+        
+        When we merge two triangles into a quad:
+        - The shared edge is removed, decreasing valence of its endpoints
+        - We want vertices closer to valence 4 (ideal for quads)
+        
+        Returns score 0-1, higher is better.
+        """
+        v0, v1 = removed_edge
+        
+        # Current valence of edge endpoints
+        val0 = valence[v0]
+        val1 = valence[v1]
+        
+        # After merging, these vertices lose 1 edge connection
+        new_val0 = val0 - 1
+        new_val1 = val1 - 1
+        
+        # Score: how much closer to valence 4 are we?
+        # For triangles, target valence is 6. For quads, it's 4.
+        # We're converting to quads, so prefer vertices that will be closer to 4
+        target = 4
+        
+        old_dev = abs(val0 - target) + abs(val1 - target)
+        new_dev = abs(new_val0 - target) + abs(new_val1 - target)
+        
+        # Improvement in deviation (positive = good)
+        improvement = old_dev - new_dev
+        
+        # Normalize to 0-1 range
+        # Max improvement is ~4 (from valence 6 to 4 for both vertices)
+        score = 0.5 + improvement / 8.0
+        
+        # Penalize creating very high or very low valence
+        if new_val0 <= 2 or new_val1 <= 2:
+            score *= 0.5  # Penalize very low valence
+        if new_val0 >= 7 or new_val1 >= 7:
+            score *= 0.7  # Penalize high valence
+        
+        return np.clip(score, 0, 1)
     
     def _order_quad_vertices(
         self,
@@ -359,16 +436,55 @@ class TriToQuadConverter:
         faces: np.ndarray,
         pairings: list,
     ) -> tuple[list, list]:
-        """Greedily select best pairings."""
+        """Greedily select best pairings (legacy, non-valence-aware)."""
+        return self._greedy_select_valence_aware(faces, pairings, 0)
+    
+    def _greedy_select_valence_aware(
+        self,
+        faces: np.ndarray,
+        pairings: list,
+        num_verts: int,
+    ) -> tuple[list, list]:
+        """Greedily select best pairings while tracking valence changes."""
         # Sort by quality (best first)
         pairings.sort(key=lambda x: -x[0])
         
         used = set()
         quads = []
         
+        # Track current valence if we're doing valence-aware selection
+        if num_verts > 0:
+            current_valence = np.zeros(num_verts, dtype=np.int32)
+            # Initialize from triangles
+            for face in faces:
+                for i in range(3):
+                    v0, v1 = int(face[i]), int(face[(i + 1) % 3])
+                    # Count unique edges
+                    current_valence[v0] += 1
+        
         for quality, f0, f1, quad in pairings:
             if f0 in used or f1 in used:
                 continue
+            
+            # Additional valence check during selection
+            if num_verts > 0:
+                # Check if this would create problematic valence
+                face0, face1 = faces[f0], faces[f1]
+                shared_verts = set(face0) & set(face1)
+                
+                # Skip if any shared vertex would drop below valence 3
+                skip = False
+                for v in shared_verts:
+                    if current_valence[v] <= 3:
+                        skip = True
+                        break
+                
+                if skip:
+                    continue
+                
+                # Update valence tracking (removing shared edge decreases valence)
+                for v in shared_verts:
+                    current_valence[v] -= 1
             
             quads.append(quad)
             used.add(f0)

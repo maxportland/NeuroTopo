@@ -6,6 +6,10 @@ Neural-guided, deterministically-controlled mesh retopology.
 
 __version__ = "0.3.0"
 
+# Suppress trimesh's verbose timing logs (on_surface, etc.) by default
+import logging
+logging.getLogger("trimesh").setLevel(logging.WARNING)
+
 from neurotopo.core.mesh import Mesh
 from neurotopo.pipeline import RetopoPipeline
 from neurotopo.tuning import auto_retopo, AutoTuner
