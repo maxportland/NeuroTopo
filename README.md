@@ -1,8 +1,33 @@
 # NeuroTopo: AI-Assisted Retopology
 
-Neural-guided, deterministically-controlled mesh retopology for production pipelines with GPT-4o visual quality assessment.
+Neural-guided, deterministically-controlled mesh retopology for production pipelines with GPT-4o visual quality assessment and PyTorch-based pole classification.
 
-## Current Performance (v0.4)
+## Current Performance (v0.5)
+
+### Topology-Preserving Reduction (High-Quality Quad Meshes)
+
+| Metric | Source | Output | Change |
+|--------|--------|--------|--------|
+| Vertices | 26,795 | 7,215 | -73% |
+| Faces | 27,025 | 7,044 | -74% |
+| Regular Vertices (V4) | 98.7% | 88.3% | -10.4% |
+| Defect Poles | 243 | 182 | -25% |
+
+*Test on production character mesh with neural network-guided pole cleanup*
+
+### Neural Pole Cleanup Improvement
+
+| Stage | Quality | Defect Poles |
+|-------|---------|--------------|
+| After Un-subdivide | 86.6% | 392 |
+| + Neural Cleanup (iter 1) | 86.8% | 349 |
+| + Neural Cleanup (iter 2) | 87.8% | 221 |
+| + Neural Cleanup (iter 3) | 88.2% | 190 |
+| + Neural Cleanup (iter 5) | **88.3%** | **182** |
+
+*PyTorch model achieves 99.9% validation accuracy on pole classification*
+
+### Benchmark Suite (Procedural Meshes)
 
 | Mesh | Best Backend | Reduction | Overall | Quad | Fidelity |
 |------|--------------|-----------|---------|------|----------|
@@ -14,8 +39,6 @@ Neural-guided, deterministically-controlled mesh retopology for production pipel
 | Bunny | trimesh | 50% | **65.9** | 47.3 | 67.4 |
 | Mechanical | trimesh | 40% | 53.1 | 24.8 | 57.8 |
 | **Average** | - | - | **59.2** | 36.1 | 61.9 |
-
-*Benchmark suite on procedural test meshes*
 
 ## Quick Start
 
